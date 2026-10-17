@@ -1,0 +1,62 @@
+server:
+  port: 8100
+
+platform: #临时
+  instance:
+    offline-threshold-seconds: 70      # 实例/哨兵离线判定阈值（秒）
+  alarm:
+    notice:
+      enabled: false                    # 告警邮件通知开关
+      receivers:                        # 接收人列表
+        - ops@example.com
+
+
+#platform:
+  register-code: Danuvius
+  retain-days: 7
+  report:
+    export-dir: ./exports
+    download-prefix: /report/download
+
+
+spring: #临时
+  mail:                                 # 启用邮件通知时配置
+    host: smtp.example.com
+    username: notice@example.com
+    password: xxxx
+
+
+
+
+#spring:
+  application:
+    name: redis-monitor-platform
+  datasource:
+    url: jdbc:postgresql://aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres
+    username: postgres.dbtakxbjecdydxfeytov
+    password: Danuvius5732
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+
+
+
+
+
+
+
+logging:
+  level:
+    com.danuvius.platform: INFO

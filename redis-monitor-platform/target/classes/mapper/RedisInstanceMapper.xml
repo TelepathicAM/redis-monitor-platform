@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.danuvius.platform.mapper.RedisInstanceMapper">
+
+    <resultMap id="InstanceItemResultMap" type="com.danuvius.platform.model.dto.monitor.RedisInstanceItemDTO">
+        <id property="instanceId" column="instance_id" jdbcType="VARCHAR"/>
+        <result property="instanceName" column="instance_name" jdbcType="VARCHAR"/>
+        <result property="hostIp" column="host_ip" jdbcType="VARCHAR"/>
+        <result property="redisPort" column="redis_port" jdbcType="VARCHAR"/>
+        <result property="role" column="role" jdbcType="VARCHAR"/>
+        <result property="redisVersion" column="redis_version" jdbcType="VARCHAR"/>
+        <result property="runStatus" column="run_status" jdbcType="VARCHAR"/>
+        <result property="masterHostIp" column="master_host_ip" jdbcType="VARCHAR"/>
+        <result property="masterRedisPort" column="master_redis_port" jdbcType="VARCHAR"/>
+        <result property="lastHeartbeatTime" column="last_heartbeat_time" jdbcType="TIMESTAMP"/>
+    </resultMap>
+
+    <select id="selectInstanceList" resultMap="InstanceItemResultMap">
+        SELECT instance_id,
+               instance_name,
+               host_ip,
+               redis_port,
+               role,
+               redis_version,
+               run_status,
+               last_heartbeat_time,
+               master_host_ip,
+               master_redis_port
+        FROM redis_instance
+        WHERE management_status = #{managementStatus}
+        ORDER BY CASE role WHEN 'MASTER' THEN 0 ELSE 1 END,
+                 instance_name ASC
+    </select>
+
+    <!--公共指标列-->
+    <sql id="metricColumns">
+        cpu_per        AS "cpuUsage",
+        mem_server_per AS "serverMemUsage",
+        mem_us         AS "redisMemUsed",
+        ops            AS "qps",
+        cmd_latency    AS "avgLatency",
+        io_iik         AS "netInputBandwidth",
+        io_iok         AS "netOutputBandwidth"
+    </sql>
+
+    <select id="selectLatestMetric" resultType="java.util.Map">
+        SELECT <include refid="metricColumns"/>,
+                tm   AS "collectTime",
+        FROM rms_metric_log
+        WHERE instance_id = #{instanceId}
+        ORDER BY tm DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectPrevMetric" resultType="java.util.Map">
+        SELECT <include refid="metricColumns"/>,
+                tm AS "collectTime"
+        FROM rms_metric_log
+        WHERE instance_id = #{instanceId}
+        ORDER BY tm DESC
+        LIMIT 1 OFFSET 1
+    </select>
+
+    <select id="selectTrendData" resultType="java.util.Map">
+        SELECT instance_id                          AS "instanceId",
+        date_trunc(#{truncUnit}, tm)         AS "bucket",
+        AVG(CASE
+        WHEN #{metricKey} = 'cpuUsage'          THEN cpu_per
+        WHEN #{metricKey} = 'serverMemUsage'    THEN mem_server_per
+        WHEN #{metricKey} = 'redisMemUsed'      THEN mem_us
+        WHEN #{metricKey} = 'qps'               THEN ops
+        WHEN #{metricKey} = 'avgLatency'        THEN cmd_latency
+        WHEN #{metricKey} = 'netInputBandwidth' THEN io_iik
+        WHEN #{metricKey} = 'netOutputBandwidth' THEN io_iok
+        END)                              AS "value"
+        FROM rms_metric_log
+        WHERE instance_id IN
+        <foreach collection="instanceIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        AND tm BETWEEN #{startTime} AND #{endTime}
+        GROUP BY instance_id, date_trunc(#{truncUnit}, tm)
+        ORDER BY bucket
+    </select>
+
+    <select id="selectOverviewStats" resultType="java.util.Map">
+        SELECT AVG(cpu_per)     AS "cpuAvg",
+               MAX(cpu_per)     AS "cpuMax",
+               (SELECT tm
+                FROM rms_metric_log
+                WHERE instance_id = #{instanceId}
+                  AND tm BETWEEN #{startTime} AND #{endTime}
+                ORDER BY cpu_per DESC
+                LIMIT 1)        AS "cpuMaxTim",
+               AVG(mem_us)      AS "redisMemAvg",
+               MAX(mem_us)      AS "redisMemMax",
+               AVG(ops)         AS "qpsAvg",
+               MAX(ops)         AS "qpsMax",
+               AVG(cmd_latency) AS "latencyAvg",
+               MAX(cmd_latency) AS "latencyMax"
+        FROM rms_metric_log
+        WHERE instance_id = #{instanceId}
+          AND tm BETWEEN #{startTime} AND #{endTime}
+    </select>
+
+
+    <select id="selectActiveInstances" resultType="com.danuvius.platform.model.entity.RedisInstance">
+        SELECT id, instance_id, instance_name, host_ip, redis_port, role, redis_version,
+               run_status, master_host_ip, master_redis_port, last_heartbeat_time,
+               management_status, created_time, updated_time
+        FROM redis_instance
+        WHERE management_status = #{managementStatus}
+    </select>
+
+    <select id="selectActiveInstancesOrderByName" resultType="com.danuvius.platform.model.entity.RedisInstance">
+        SELECT id, instance_id, instance_name, host_ip, redis_port, role, redis_version,
+               run_status, master_host_ip, master_redis_port, last_heartbeat_time,
+               management_status, created_time, updated_time
+        FROM redis_instance
+        WHERE management_status = #{managementStatus}
+        ORDER BY instance_name ASC
+    </select>
+
+
+</mapper>

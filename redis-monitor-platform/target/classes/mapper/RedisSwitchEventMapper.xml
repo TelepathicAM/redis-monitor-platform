@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.danuvius.platform.mapper.RedisSwitchEventMapper">
+
+    <resultMap id="BaseResultMap" type="com.danuvius.platform.model.entity.RedisSwitchEvent">
+        <id column="id" property="id"/>
+        <result column="old_masterid" property="oldMasterId"/>
+        <result column="new_master_id" property="newMasterId"/>
+        <result column="switch_time"  property="switchTime"/>
+        <result column="switch_type" property="switchType"/>
+        <result column="switch_result" property="switchResult"/>
+        <result column="cost" property="cost"/>
+        <result column="created_time" property="createdTime"/>
+        <result column="updated_time" property="updatedTime"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id, instance_id, switch_time, old_master, new_master, reason
+    </sql>
+
+    <select id="selectLatestSwitchEvent" resultType="com.danuvius.platform.model.entity.RedisSwitchEvent">
+        SELECT id, old_master_id, new_master_id, switch_time, switch_type,
+               switch_result, cost, created_time, updated_time
+        FROM redis_switch_event
+        ORDER BY switch_time DESC
+        LIMIT 1
+    </select>
+
+</mapper>
