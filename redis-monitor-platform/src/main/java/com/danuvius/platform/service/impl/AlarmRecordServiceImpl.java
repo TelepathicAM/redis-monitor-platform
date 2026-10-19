@@ -10,8 +10,11 @@ import com.danuvius.platform.mapper.MetricLogMapper;
 import com.danuvius.platform.mapper.RedisInstanceMapper;
 import com.danuvius.platform.model.dto.alarm.record.*;
 import com.danuvius.platform.model.entity.AlarmRecord;
+import com.danuvius.platform.model.entity.AuditLog;
+import com.danuvius.platform.model.enums.StatusEnum;
 import com.danuvius.platform.service.AlarmNoticeService;
 import com.danuvius.platform.service.AlarmRecordService;
+import com.danuvius.platform.service.AuditLogService;
 import com.danuvius.platform.util.ParseUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,6 +33,7 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
     private final AlarmRecordMapper recordMapper;
     private final AlarmRuleMapper ruleMapper;
     private final MetricLogMapper metricLogMapper;
+    private final AuditLogService auditLogService;
 
     /*告警详情需关联实例信息与通知记录 */
     private final RedisInstanceMapper redisInstanceMapper;
@@ -39,11 +43,13 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
 
     public AlarmRecordServiceImpl(AlarmRuleMapper ruleMapper, AlarmRecordMapper recordMapper,
                                   MetricLogMapper metricLogMapper, RedisInstanceMapper redisInstanceMapper,
-                                  AlarmNoticeService alarmNoticeService) {
+                                  AuditLogService auditLogService, AlarmNoticeService alarmNoticeService
+                                  ) {
         this.recordMapper = recordMapper;
         this.ruleMapper = ruleMapper;
         this.metricLogMapper = metricLogMapper;
         this.redisInstanceMapper = redisInstanceMapper;
+        this.auditLogService = auditLogService;
         this.alarmNoticeService = alarmNoticeService;
     }
     @Override
@@ -66,8 +72,8 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
     public RecordOverviewResponse getRecordOverview(String startTime, String endTime) {
         LocalDateTime end = LocalDateTime.now();
         LocalDateTime start = end.minusDays(3);
-        if (startTime == null) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
-        if (endTime == null) endTime = end.format(FORMATTER);
+        if (startTime == null || startTime.trim().isEmpty()) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
+        if (endTime == null || endTime.trim().isEmpty()) endTime = end.format(FORMATTER);
         return recordMapper.selectRecordOverview(startTime, endTime);
     }
 
@@ -83,7 +89,7 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
         int offset = (pageNum - 1) * pageSize;
 
         String instanceId=req.getInstanceId();
-        Integer alarmLevel=req.getAlarmLevel();
+        String alarmLevel=req.getAlarmLevel();
         String metricKey=req.getMetricKey();
         String recoverStatus=req.getRecoverStatus();
         String keyword=req.getKeyword();
@@ -92,12 +98,12 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
 
         LocalDateTime end = LocalDateTime.now();
         LocalDateTime start = end.minusDays(3);
-        if (startTime == null) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
-        if (endTime == null) endTime = end.format(FORMATTER);
+        if (startTime == null || startTime.trim().isEmpty()) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
+        if (endTime == null || endTime.trim().isEmpty()) endTime = end.format(FORMATTER);
 
         //查
         List<RecordItemResponse> list = recordMapper.selectRecordPage(
-                instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime,offset,pageNum);
+                instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime,offset,pageSize);
         long total = recordMapper.countRecordPage(
                 instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime);
 
@@ -124,14 +130,16 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
         RecordDetailResponse dto = new RecordDetailResponse();
         dto.setAlarmBaseInfo(record);
         if (record.getRuleId() != null) {
-            dto.setRuleInfo(ruleMapper.selectById(record.getRuleId()));
+            dto.setRuleInfo(ruleMapper.selectByRuleId(record.getRuleId()));
         }
         /* 关联节点信息表查询实例名、ip、端口、角色 */
         if (record.getInstanceId() != null) {
-            dto.setInstanceInfo(redisInstanceMapper.selectById(record.getInstanceId()));
+            dto.setInstanceInfo(redisInstanceMapper.selectByInstanceId(record.getInstanceId()));
         }
         /* 查询通知发送记录表，返回邮件通知发送时间、接收人、发送状态 */
         dto.setNoticeLogs(alarmNoticeService.listByAlarmRecordId(record.getId()));
+        /*人工确认恢复后，从操作审计日志填充处理人信息*/
+        fillOperatorInfo(dto, alarmRecordId);
         return dto;
     }
 
@@ -161,7 +169,7 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
         LocalDateTime start = record.getTriggerTime().minusMinutes(30);
         LocalDateTime end;
         //未恢复：当前时间，已恢复：恢复时间+10min
-        if (Boolean.TRUE.equals(record.getRecoverStatus()) && record.getRecoverTime() != null) {
+        if ("1".equals(record.getRecoverStatus()) && record.getRecoverTime() != null) {
             end = record.getRecoverTime().plusMinutes(10);
         } else {
             end = LocalDateTime.now();
@@ -181,11 +189,68 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
                 }
                 timestampList.add(tm.toString());
                 Object val = row.get("value");
-                valueList.add(ParseUtils.stringToDouble(val.toString()));
+                valueList.add(val == null ? null : ParseUtils.stringToDouble(val.toString()));
             }
         }
         dto.setTimestampList(timestampList);
         dto.setValueList(valueList);
         return dto;
+    }
+
+    /**
+     * 从操作审计日志填充告警处理人信息（人工确认恢复记录）
+     * @param dto
+     * @param alarmRecordId
+     */
+    private void fillOperatorInfo(RecordDetailResponse dto, String alarmRecordId) {
+        try {
+            AuditLog latest = auditLogService.lambdaQuery()
+                    .eq(AuditLog::getTargetId, alarmRecordId)
+                    .eq(AuditLog::getOperationType, "恢复")
+                    .orderByDesc(AuditLog::getOperationTime)
+                    .last("LIMIT 1")
+                    .one();
+            if (latest != null) {
+                dto.setOperatorId(latest.getOperatorId());
+                dto.setOperatorName(latest.getOperatorName());
+                dto.setOperationTime(latest.getOperationTime() == null
+                        ? null : latest.getOperationTime().format(FORMATTER));
+                dto.setOperationMsg(latest.getOperationContent());
+            }
+        } catch (Exception e) {
+            // 处理人信息获取失败不影响详情主流程
+            log.warn("[告警详情] 获取处理人信息失败, alarmRecordId={}", alarmRecordId, e);
+        }
+    }
+
+
+    /**
+     * 告警人工确认恢复：
+     * 1) 校验告警记录存在；
+     * 2) 已恢复则幂等返回 true，不重复写审计日志；
+     * 3) 更新 recover_status=1、recover_time=当前时间、updated_time=当前时间；
+     * 4) 记入操作审计日志（module=告警记录，operationType=恢复）。
+     */
+    @Override
+    public boolean recoverAlarm(String alarmRecordId) {
+        AlarmRecord record = recordMapper.selectById(alarmRecordId);
+        if (record == null) {
+            throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "告警记录不存在");
+        }
+        //已恢复幂等返回，不重复写审计日志
+        if (StatusEnum.RECOVER.getCode().equals(record.getRecoverStatus())) {
+            return true;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        record.setRecoverStatus(StatusEnum.RECOVER.getCode());
+        record.setRecoverTime(now);
+        record.setUpdatedTime(now);
+        int rows = recordMapper.updateById(record);
+        if (rows > 0) {
+            //人工确认恢复记入操作审计日志
+            auditLogService.record("告警记录", "恢复", alarmRecordId,
+                    "人工确认恢复告警：" + record.getAlarmNo());
+        }
+        return rows > 0;
     }
 }

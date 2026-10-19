@@ -9,19 +9,18 @@
         <result column="switch_time"  property="switchTime"/>
         <result column="switch_type" property="switchType"/>
         <result column="switch_result" property="switchResult"/>
-        <result column="cost" property="cost"/>
         <result column="created_time" property="createdTime"/>
         <result column="updated_time" property="updatedTime"/>
     </resultMap>
 
     <sql id="Base_Column_List">
         id, old_master_id, new_master_id, switch_time, switch_type, switch_result,
-        cost, created_time, updated_time
+        created_time, updated_time
     </sql>
 
     <select id="selectLatestSwitchEvent" resultType="com.danuvius.platform.model.entity.RedisSwitchEvent">
         SELECT id, old_master_id, new_master_id, switch_time, switch_type,
-               switch_result, cost, created_time, updated_time
+               switch_result, created_time, updated_time
         FROM redis_switch_event
         ORDER BY switch_time DESC
         LIMIT 1
@@ -43,6 +42,7 @@
         LEFT JOIN redis_instance o ON e.old_master_id = o.instance_id
         LEFT JOIN redis_instance n ON e.new_master_id = n.instance_id
         WHERE e.switch_time BETWEEN #{startTime} AND #{endTime}
+          AND e.switch_type != '0'
         ORDER BY e.switch_time DESC
         LIMIT #{limit}
     </select>
@@ -53,6 +53,7 @@
                MAX(switch_time)  AS "lastSwitchTime"
         FROM redis_switch_event
         WHERE switch_time BETWEEN #{startTime} AND #{endTime}
+          AND switch_type != '0'
     </select>
 
 </mapper>

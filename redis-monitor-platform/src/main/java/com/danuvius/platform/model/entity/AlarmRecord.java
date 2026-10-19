@@ -11,6 +11,7 @@ import java.util.Date;
 @Data
 @TableName("alarm_record")
 public class AlarmRecord {
+    /** 主键id */
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
     /*告警编号*/
@@ -52,6 +53,8 @@ public class AlarmRecord {
     /*告警状态："0"=未恢复 / "1"=已恢复*/
     private String recoverStatus;
 
+    /*创建时间*/
     private LocalDateTime createdTime;
+    /*最后更新时间*/
     private LocalDateTime updatedTime;
 }

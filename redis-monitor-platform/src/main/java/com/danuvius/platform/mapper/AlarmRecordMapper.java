@@ -21,7 +21,7 @@ public interface AlarmRecordMapper extends BaseMapper<AlarmRecord> {
     RecordOverviewResponse selectRecordOverview(@Param("startTime") String startTime,
     /*记录分页*/                                            @Param("endTime") String endTime);
     List<RecordItemResponse> selectRecordPage(@Param("instanceId") String instanceId,
-                                              @Param("alarmLevel") Integer alarmLevel,
+                                              @Param("alarmLevel") String alarmLevel,
                                               @Param("metricKey") String metricKey,
                                               @Param("recoverStatus") String recoverStatus,
                                               @Param("keyword") String keyword,
@@ -31,7 +31,7 @@ public interface AlarmRecordMapper extends BaseMapper<AlarmRecord> {
                                               @Param("limit") int limit);
     /*记录页数*/
     long countRecordPage(@Param("instanceId") String instanceId,
-                         @Param("alarmLevel") Integer alarmLevel,
+                         @Param("alarmLevel") String alarmLevel,
                          @Param("metricKey") String metricKey,
                          @Param("recoverStatus") String recoverStatus,
                          @Param("keyword") String keyword,
@@ -55,5 +55,15 @@ public interface AlarmRecordMapper extends BaseMapper<AlarmRecord> {
     Map<String, Object> selectReportAlarmStats(@Param("instanceId") String instanceId,
                                                @Param("startTime") String startTime,
                                                @Param("endTime") String endTime);
+
+    /**
+     * 查询指定规则下的未恢复告警，用于自动恢复检查。
+     * 入参 ruleIds 需非空（调用方已保证），避免 IN () 语法错误。
+     *
+     * @param ruleIds 规则id列表，非空
+     * @return 未恢复告警列表（按触发时间升序，便于稳定处理）
+     */
+    // [新增] 自动恢复：按规则id批量查询未恢复告警
+    List<AlarmRecord> selectUnrecoveredByRuleIds(@Param("ruleIds") List<String> ruleIds);
 
 }

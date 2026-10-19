@@ -5,7 +5,6 @@
     <!-- 节点状态日志结果映射 -->
     <resultMap id="BaseResultMap" type="com.danuvius.platform.model.entity.NodeStatus">
         <id column="id" property="id"/>
-        <result column="agent_id" property="agentId"/>
         <result column="instance_id" property="instanceId"/>
         <result column="run_id" property="runId"/>
         <result column="tm" property="tm"/>
@@ -19,7 +18,7 @@
 
     <!-- 通用查询列 -->
     <sql id="Base_Column_List">
-        id, agent_id, instance_id, run_id, tm, collect_status, error_msg,
+        id, instance_id, run_id, tm, collect_status, error_msg,
         role, ping_latency, created_time, updated_time
     </sql>
 

@@ -10,6 +10,9 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 @Mapper
 public interface AlarmRuleMapper extends BaseMapper<AlarmRule> {
+    AlarmRule selectByRuleId(@Param("ruleId") String ruleId);
+
+
     List<RuleItemDTO> selectRulePage(@Param("keyword") String keyword,
                                      @Param("alarmLevel") String alarmLevel,
                                      @Param("scopeInstanceIds") List<String> scopeInstanceIds,

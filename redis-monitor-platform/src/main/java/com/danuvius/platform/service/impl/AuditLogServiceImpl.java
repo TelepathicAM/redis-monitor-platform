@@ -65,7 +65,7 @@ public class AuditLogServiceImpl extends ServiceImpl<AuditLogMapper, AuditLog>
         try {
             LocalDateTime now = LocalDateTime.now();
             AuditLog auditLog = new AuditLog();
-            auditLog.setId(UUID.randomUUID().toString().replace("-", ""));
+
             auditLog.setOperatorId(operatorId);
             auditLog.setOperatorName(operatorName);
             auditLog.setModule(module);

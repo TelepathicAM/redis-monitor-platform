@@ -39,7 +39,7 @@
                r.recover_status
         FROM alarm_record r
                  INNER JOIN redis_instance i ON r.instance_id = i.instance_id
-        WHERE r.recover_status = 0
+        WHERE r.recover_status = '0'
         ORDER BY r.trigger_time DESC
         LIMIT #{limit}
     </select>
@@ -69,11 +69,11 @@
     <select id="selectRecordOverview" resultType="com.danuvius.platform.model.dto.alarm.record.RecordOverviewResponse">
         SELECT
             COUNT(*) as "alarmTotal",
-            COUNT(CASE WHEN recover_status = 0 THEN 1 END) as "unrecoveredCount",
-            COUNT(CASE WHEN recover_status = 1 THEN 1 END) as "recoveredCount",
-            COUNT(CASE WHEN alarm_level = 1 THEN 1 END) as "infoCount",
-            COUNT(CASE WHEN alarm_level = 2 THEN 1 END) as "alarmCount",
-            COUNT(CASE WHEN alarm_level = 3 THEN 1 END) as "severityCount"
+            COUNT(CASE WHEN recover_status = '0' THEN 1 END) as "unrecoveredCount",
+            COUNT(CASE WHEN recover_status = '1' THEN 1 END) as "recoveredCount",
+            COUNT(CASE WHEN alarm_level = '1' THEN 1 END) as "infoCount",
+            COUNT(CASE WHEN alarm_level = '2' THEN 1 END) as "alarmCount",
+            COUNT(CASE WHEN alarm_level = '3' THEN 1 END) as "severityCount"
         FROM alarm_record
         WHERE trigger_time BETWEEN #{startTime} AND #{endTime}
     </select>
@@ -97,10 +97,10 @@
         FROM alarm_record r
         LEFT JOIN redis_instance i ON r.instance_id = i.instance_id
         WHERE 1=1
-        <if test="instanceId != null">AND r.instance_id = #{instanceId}</if>
-        <if test="alarmLevel != null">AND r.alarm_level = #{alarmLevel}</if>
-        <if test="metricKey != null">AND r.metric_key = #{metricKey}</if>
-        <if test="recoverStatus != null">AND r.recover_status = #{recoverStatus}</if>
+        <if test="instanceId != null and instanceId != ''">AND r.instance_id = #{instanceId}</if>
+        <if test="alarmLevel != null and alarmLevel != ''">AND r.alarm_level = #{alarmLevel}</if>
+        <if test="metricKey != null and metricKey != ''">AND r.metric_key = #{metricKey}</if>
+        <if test="recoverStatus != null and recoverStatus != ''">AND r.recover_status = #{recoverStatus}</if>
         <if test="keyword != null and keyword != ''">
             AND (r.alarm_no LIKE CONCAT('%',#{keyword},'%')
             OR r.alarm_content LIKE CONCAT('%',#{keyword},'%'))
@@ -113,10 +113,10 @@
     <select id="countRecordPage" resultType="long">
         SELECT COUNT(*) FROM alarm_record r
         WHERE 1=1
-        <if test="instanceId != null">AND r.instance_id = #{instanceId}</if>
-        <if test="alarmLevel != null">AND r.alarm_level = #{alarmLevel}</if>
-        <if test="metricKey != null">AND r.metric_key = #{metricKey}</if>
-        <if test="recoverStatus != null">AND r.recover_status = #{recoverStatus}</if>
+        <if test="instanceId != null and instanceId != ''">AND r.instance_id = #{instanceId}</if>
+        <if test="alarmLevel != null and alarmLevel != ''">AND r.alarm_level = #{alarmLevel}</if>
+        <if test="metricKey != null and metricKey != ''">AND r.metric_key = #{metricKey}</if>
+        <if test="recoverStatus != null and recoverStatus != ''">AND r.recover_status = #{recoverStatus}</if>
         <if test="keyword != null and keyword != ''">
             AND (r.alarm_no LIKE CONCAT('%',#{keyword},'%') OR r.alarm_content LIKE CONCAT('%',#{keyword},'%'))
         </if>
@@ -157,15 +157,50 @@
 
     <!-- 日周报告警统计：总数与分级统计 -->
     <select id="selectReportAlarmStats" resultType="java.util.Map">
-        SELECT COUNT(*)                                        AS "alarmTotal",
-               COUNT(CASE WHEN alarm_level = 1 THEN 1 END)     AS "infoCount",
-               COUNT(CASE WHEN alarm_level = 2 THEN 1 END)     AS "alarmCount",
-               COUNT(CASE WHEN alarm_level = 3 THEN 1 END)     AS "severityCount"
+        SELECT COUNT(*)                                 AS "alarmTotal",
+        COUNT(CASE WHEN alarm_level = '1' THEN 1 END)   AS "infoCount",
+        COUNT(CASE WHEN alarm_level = '2' THEN 1 END)   AS "alarmCount",
+        COUNT(CASE WHEN alarm_level = '3' THEN 1 END)   AS "severityCount"
         FROM alarm_record
         WHERE trigger_time BETWEEN #{startTime} AND #{endTime}
         <if test="instanceId != null and instanceId != ''">
             AND instance_id = #{instanceId}
         </if>
+    </select>
+
+    <!-- [新增] 自动恢复用：AlarmRecord 实体结果映射 -->
+    <resultMap id="AlarmRecordResultMap" type="com.danuvius.platform.model.entity.AlarmRecord">
+        <id     column="id"              property="id"              jdbcType="VARCHAR"/>
+        <result column="alarm_no"        property="alarmNo"         jdbcType="VARCHAR"/>
+        <result column="rule_id"         property="ruleId"          jdbcType="VARCHAR"/>
+        <result column="instance_id"     property="instanceId"      jdbcType="VARCHAR"/>
+        <result column="metric_key"      property="metricKey"       jdbcType="VARCHAR"/>
+        <result column="metric_name"     property="metricName"      jdbcType="VARCHAR"/>
+        <result column="alarm_level"     property="alarmLevel"      jdbcType="VARCHAR"/>
+        <result column="alarm_content"   property="alarmContent"    jdbcType="VARCHAR"/>
+        <result column="trigger_value"   property="triggerValue"    jdbcType="VARCHAR"/>
+        <result column="threshold"       property="threshold"       jdbcType="VARCHAR"/>
+        <result column="unit"            property="unit"            jdbcType="VARCHAR"/>
+        <result column="trigger_time"    property="triggerTime"     jdbcType="TIMESTAMP"/>
+        <result column="recover_time"    property="recoverTime"     jdbcType="TIMESTAMP"/>
+        <result column="recover_status"  property="recoverStatus"   jdbcType="VARCHAR"/>
+        <result column="created_time"    property="createdTime"     jdbcType="TIMESTAMP"/>
+        <result column="updated_time"    property="updatedTime"     jdbcType="TIMESTAMP"/>
+    </resultMap>
+    <!-- 自动恢复：按规则id批量查询未恢复告警。
+     调用方保证 ruleIds 非空。
+     recover_status 与 selectRuleOverview 口径一致，使用 '0' 字符串比较。 -->
+    <select id="selectUnrecoveredByRuleIds" resultMap="AlarmRecordResultMap">
+        SELECT id, alarm_no, rule_id, instance_id, metric_key, metric_name, alarm_level,
+        alarm_content, trigger_value, threshold, unit,
+        trigger_time, recover_time, recover_status, created_time, updated_time
+        FROM alarm_record
+        WHERE recover_status = '0'
+        AND rule_id IN
+        <foreach collection="ruleIds" item="ruleId" open="(" separator="," close=")">
+            #{ruleId}
+        </foreach>
+        ORDER BY trigger_time ASC
     </select>
 
 </mapper>

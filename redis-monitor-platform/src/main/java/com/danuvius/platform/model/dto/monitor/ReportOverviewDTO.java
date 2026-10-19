@@ -53,8 +53,11 @@ public class ReportOverviewDTO implements Serializable {
     /** 告警分级统计 {提示:xx, 警告:xx, 严重:xx} */
     @Data
     public static class AlarmSeverityCountDTO implements Serializable {
+        /** 提示级别告警数 */
         private Long info;
+        /** 警告级别告警数 */
         private Long alarm;
+        /** 严重级别告警数 */
         private Long severity;
     }
 }

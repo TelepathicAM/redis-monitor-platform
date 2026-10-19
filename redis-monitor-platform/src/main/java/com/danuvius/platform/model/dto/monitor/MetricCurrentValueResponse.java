@@ -8,5 +8,6 @@ import java.util.List;
 
 @Data
 public class MetricCurrentValueResponse implements Serializable {
+    /** 核心实时指标列表（6 项） */
     private List<MetricCurrentValueDTO> metrics;
 }

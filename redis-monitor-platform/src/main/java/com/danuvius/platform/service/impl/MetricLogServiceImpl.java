@@ -9,6 +9,7 @@ import com.danuvius.platform.service.MetricLogService;
 import com.danuvius.platform.util.CacheKeyUtil;
 import com.github.benmanes.caffeine.cache.Cache;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,8 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
         implements MetricLogService {
 
     private static final String ROLE_MASTER = "MASTER";
+    @Value("${platform.retain-days:7}")
+    private int retainDays;
 
     private final MetricLogMapper metricLogMapper;
     private final NodeStatusMapper nodeStatusMapper;
@@ -65,7 +68,7 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
 
         // 写指标日志
         MetricLog metricLog = new MetricLog();
-        metricLog.setId(UUID.randomUUID().toString().replace("-", ""));
+
         metricLog.setInstanceId(metric.getInstanceId());
         metricLog.setTm(now);
         metricLog.setCpuPer(metric.getCpuPer());
@@ -82,7 +85,7 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
         metricLog.setMasterPort(metric.getMasterPort());
         metricLog.setReplDelay(metric.getReplDelay());
 
-        metricLog.setCollectType(metricLog.getCollectType().equals("1")?"1":"0");
+        metricLog.setCollectType("1".equals(metric.getCollectType()) ? "1" : "0");
 
         metricLog.setCreatedTime(now);
         metricLog.setUpdatedTime(now);
@@ -122,7 +125,7 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
             return;
         }
 
-        RedisInstance inst = redisInstanceMapper.selectById(instanceId);
+        RedisInstance inst = redisInstanceMapper.selectByInstanceId(instanceId);
         if (inst == null) {
             return;
         }
@@ -178,7 +181,7 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     private void insertSwitchEvent(String oldMasterId, String newMasterId,
                                    TypeEnum type, LocalDateTime now) {
         RedisSwitchEvent event = new RedisSwitchEvent();
-        event.setId(UUID.randomUUID().toString().replace("-", ""));
+
         event.setOldMasterId(oldMasterId);
         event.setNewMasterId(newMasterId);
         event.setSwitchTime(now);
@@ -203,7 +206,6 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     private void generateSwitchAlarm(String oldMasterId, String newMasterId, LocalDateTime now) {
         try {
             AlarmRecord record = new AlarmRecord();
-            record.setId(UUID.randomUUID().toString().replace("-", ""));
             record.setAlarmNo("AL" + System.currentTimeMillis()
                     + String.format("%03d", (int) (Math.random() * 1000)));
             // 系统切换事件，不关联具体规则
@@ -214,6 +216,8 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
             record.setAlarmLevel(AlarmLevelEnum.WARNING.getCode());
             record.setAlarmContent("检测到主从切换：原主节点 " + (oldMasterId == null ? "null" : oldMasterId)
                     + " → 新主节点 " + newMasterId);
+            record.setTriggerValue("");
+            record.setUnit("");
             record.setTriggerTime(now);
             record.setRecoverStatus(StatusEnum.UNRECOVER.getCode());
             record.setCreatedTime(now);
@@ -245,7 +249,7 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     @Override
     @Scheduled(cron = "0 0 3 * * ?")
     public void cleanExpiredData() {
-        LocalDateTime threshold = LocalDateTime.now().minusDays(7);
+        LocalDateTime threshold = LocalDateTime.now().minusDays(retainDays);
         metricLogMapper.deleteExpiredBefore(threshold);
         nodeStatusMapper.deleteExpiredBefore(threshold);
     }

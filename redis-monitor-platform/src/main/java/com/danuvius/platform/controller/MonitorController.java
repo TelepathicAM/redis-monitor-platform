@@ -2,6 +2,10 @@ package com.danuvius.platform.controller;
 
 import com.danuvius.platform.common.BaseResponse;
 import com.danuvius.platform.common.ResultUtils;
+import com.danuvius.platform.common.exception.validator.CollectionValidator;
+import com.danuvius.platform.common.exception.validator.IdValidator;
+import com.danuvius.platform.common.exception.validator.ParameterValidator;
+import com.danuvius.platform.common.exception.validator.StringValidator;
 import com.danuvius.platform.model.dto.monitor.*;
 import com.danuvius.platform.service.RedisInstanceService;
 import com.danuvius.platform.service.SentinelNodeInfoService;
@@ -18,6 +22,18 @@ import java.util.List;
 @Slf4j
 @Validated
 public class MonitorController {
+    /** [新增校验] 纳管状态合法值 */
+    private static final String[] MANAGEMENT_STATUS = {"0", "1"};
+    /** [新增校验] 趋势时间范围合法值 */
+    private static final String[] TIME_RANGES = {"近1h", "近6h"};
+    /** [新增校验] 报告类型合法值 */
+    private static final String[] REPORT_TYPES = {"日报", "周报"};
+    /** [新增校验] 趋势指标 key 合法值（与 MetricTypeEnum 采集指标对齐） */
+    private static final String[] TREND_METRIC_KEYS = {
+            "cpuUsage", "serverMemUsage", "redisMemUsed", "qps", "avgLatency",
+            "netInputBandwidth", "netOutputBandwidth"
+    };
+
 
     private final RedisInstanceService redisInstanceService;
     private final SentinelNodeInfoService sentinelNodeInfoService;
@@ -35,6 +51,8 @@ public class MonitorController {
     @GetMapping("/redis/instances")
     public BaseResponse<List<RedisInstanceItemDTO>> instances(
             @RequestParam(defaultValue = "1") String managementStatus) {
+        ParameterValidator.in(managementStatus, MANAGEMENT_STATUS, "managementStatus");
+
         return ResultUtils.success(redisInstanceService.getInstanceList(managementStatus));
     }
 
@@ -46,6 +64,8 @@ public class MonitorController {
     @GetMapping("/realtime/current-values")
     public BaseResponse<MetricCurrentValueResponse> currentValues(
             @RequestParam @NotBlank(message = "instanceId不能为空") String instanceId) {
+        IdValidator.snowflake(instanceId, "instanceId");
+
         return ResultUtils.success(redisInstanceService.getCurrentValues(instanceId));
     }
 
@@ -56,6 +76,14 @@ public class MonitorController {
      */
     @GetMapping("/realtime/trend")
     public BaseResponse<TrendResponse> trend(@Valid TrendRequest req) {
+        CollectionValidator.notEmpty(req.getInstanceIds(), "instanceIds");
+        CollectionValidator.maxSize(req.getInstanceIds(), 50, "instanceIds");
+        CollectionValidator.noBlankStringElement(req.getInstanceIds(), "instanceIds");
+        StringValidator.notBlank(req.getMetricKey(), "metricKey");
+        ParameterValidator.in(req.getMetricKey(), TREND_METRIC_KEYS, "metricKey");
+        StringValidator.notBlank(req.getTimeRange(), "timeRange");
+        ParameterValidator.in(req.getTimeRange(), TIME_RANGES, "timeRange");
+
         return ResultUtils.success(redisInstanceService.getTrend(req));
     }
 
@@ -67,6 +95,8 @@ public class MonitorController {
     @GetMapping("/sentinel/sentinels")
     public BaseResponse<List<SentinelItemResponse>> sentinels(
             @RequestParam(defaultValue = "1") String managementStatus) {
+        ParameterValidator.in(managementStatus, MANAGEMENT_STATUS, "managementStatus");
+
         return ResultUtils.success(sentinelNodeInfoService.getSentinelList(managementStatus));
     }
 
@@ -95,28 +125,30 @@ public class MonitorController {
      */
     @PostMapping("/report/query")
     public BaseResponse<ReportQueryResponse> reportQuery(@Valid @RequestBody ReportQueryRequest req) {
+        IdValidator.snowflake(req.getInstanceId(), "instanceId");
+        StringValidator.notBlank(req.getReportType(), "reportType");
+        ParameterValidator.in(req.getReportType(), REPORT_TYPES, "reportType");
+
         return ResultUtils.success(redisInstanceService.queryReport(req));
     }
 
 
-    /**
-     * Todo 去除exportType
-     */
 
     /**
      * 报告导出接口
      * @param instanceId
      * @param reportType
-     * @param exportType
      * @return
      */
     @GetMapping("/report/export")
     public BaseResponse<ReportExportResponse> reportExport(
             @RequestParam @NotBlank(message = "instanceId不能为空") String instanceId,
-            @RequestParam @NotBlank(message = "reportType不能为空") String reportType,
-            @RequestParam(defaultValue = "excel") String exportType) {
+            @RequestParam @NotBlank(message = "reportType不能为空") String reportType) {
+        IdValidator.snowflake(instanceId, "instanceId");
+        ParameterValidator.in(reportType, REPORT_TYPES, "reportType");
+
         return ResultUtils.success(
-                redisInstanceService.exportReport(instanceId, reportType, exportType));
+                redisInstanceService.exportReport(instanceId, reportType));
     }
 
     /**
@@ -125,6 +157,8 @@ public class MonitorController {
     @GetMapping("/report/export/status")
     public BaseResponse<ReportExportResponse> exportStatus(
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId) {
+        IdValidator.prefixed(taskId, "taskId");
+
         return ResultUtils.success(redisInstanceService.queryExportTask(taskId));
     }
 
@@ -135,11 +169,12 @@ public class MonitorController {
     public void exportDownload(
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId,
             javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
+        IdValidator.prefixed(taskId, "taskId");
+
         java.io.File file = redisInstanceService.getExportFile(taskId);
         String fileName = java.net.URLEncoder.encode(file.getName(), "UTF-8").replace("+", "%20");
-        String contentType = file.getName().endsWith(".csv")
-                ? "text/csv;charset=UTF-8" : "text/html;charset=UTF-8";
-        response.setContentType(contentType);
+
+        response.setContentType("application/pdf");
         response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + fileName);
         try (java.io.InputStream in = java.nio.file.Files.newInputStream(file.toPath());
              java.io.OutputStream out = response.getOutputStream()) {

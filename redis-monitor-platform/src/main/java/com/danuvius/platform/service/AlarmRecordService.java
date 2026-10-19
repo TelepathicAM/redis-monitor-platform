@@ -48,4 +48,11 @@ public interface AlarmRecordService extends IService<AlarmRecord> {
      */
     RecordMetricTrendResponse getMetricTrend(String alarmRecordId);
 
+    /**
+     * 告警人工确认恢复
+     * @param alarmRecordId
+     * @return
+     */
+    boolean recoverAlarm(String alarmRecordId);
+
 }

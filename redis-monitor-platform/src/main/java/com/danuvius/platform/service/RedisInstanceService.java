@@ -61,10 +61,9 @@ public interface RedisInstanceService extends IService<RedisInstance> {
      * 导出
      * @param instanceId
      * @param reportType
-     * @param exportType 导出类型：pdf/excel
      * @return
      */
-    ReportExportResponse exportReport(String instanceId, String reportType, String exportType);
+    ReportExportResponse exportReport(String instanceId, String reportType);
 
     /**
      * 查询导出任务状态，前端3s轮询

@@ -12,6 +12,7 @@ import java.util.Date;
 @TableName("rms_node_status_log")
 public class NodeStatus {
 
+    /*主键id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
     /*实例id*/
@@ -29,7 +30,9 @@ public class NodeStatus {
     private String role;
     /*连通性延迟*/
     private String pingLatency;
+    /*创建时间*/
     private LocalDateTime createdTime;
+    /*最后更新时间*/
     private LocalDateTime updatedTime;
 
 }

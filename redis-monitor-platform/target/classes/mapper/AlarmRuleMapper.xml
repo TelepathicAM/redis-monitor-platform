@@ -36,6 +36,7 @@
         <result property="alarmLevel" column="alarm_level" jdbcType="VARCHAR"/>
         <result property="silenceDuration" column="silence_duration" jdbcType="VARCHAR"/>
         <result property="scopeType" column="scope_type" jdbcType="VARCHAR"/>
+        <result property="scopeInstanceId" column="scope_instance_id" jdbcType="VARCHAR"/>
         <result property="enableStatus" column="enable_status" jdbcType="VARCHAR"/>
         <result property="createdTime" column="created_time" jdbcType="TIMESTAMP"/>
         <result property="updatedTime" column="updated_time" jdbcType="TIMESTAMP"/>
@@ -53,6 +54,7 @@
         alarm_level,
         silence_duration,
         scope_type,
+        scope_instance_id,
         enable_status,
         created_time,
         updated_time
@@ -62,17 +64,18 @@
             AND (rule_name LIKE CONCAT('%',#{keyword},'%')
             OR metric_key LIKE CONCAT('%',#{keyword},'%'))
         </if>
-        <if test="alarmLevel != null">AND alarm_level = #{alarmLevel}</if>
-        <if test="enableStatus != null">AND enable_status = #{enableStatus}</if>
+        <if test="alarmLevel != null and alarmLevel != ''">AND alarm_level = #{alarmLevel}</if>
+        <if test="enableStatus != null and enableStatus != ''">AND enable_status = #{enableStatus}</if>
         <if test="scopeInstanceIds != null and scopeInstanceIds.size() > 0">
             AND scope_type = '2'
             AND (
             <foreach collection="scopeInstanceIds" item="id" separator=" OR ">
-                scope_instance_ids LIKE CONCAT('%', #{id}, '%')
+                CONCAT(',', REPLACE(scope_instance_id, ' ', ''), ',') LIKE CONCAT('%,', #{id}, ',%')
             </foreach>
             )
         </if>
         ORDER BY created_time DESC
+        LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="countRulePage" resultType="long">
@@ -80,8 +83,16 @@
         <if test="keyword != null and keyword != ''">
             AND (rule_name LIKE CONCAT('%',#{keyword},'%') OR metric_key LIKE CONCAT('%',#{keyword},'%'))
         </if>
-        <if test="alarmLevel != null">AND alarm_level = #{alarmLevel}</if>
-        <if test="enableStatus != null">AND enable_status = #{enableStatus}</if>
+        <if test="alarmLevel != null and alarmLevel != ''">AND alarm_level = #{alarmLevel}</if>
+        <if test="enableStatus != null and enableStatus != ''">AND enable_status = #{enableStatus}</if>
+        <if test="scopeInstanceIds != null and scopeInstanceIds.size() > 0">
+            AND scope_type = '2'
+            AND (
+            <foreach collection="scopeInstanceIds" item="id" separator=" OR ">
+                CONCAT(',', REPLACE(scope_instance_id, ' ', ''), ',') LIKE CONCAT('%,', #{id}, ',%')
+            </foreach>
+            )
+        </if>
     </select>
 
     <select id="selectAllEnabled" resultType="com.danuvius.platform.model.entity.AlarmRule">
@@ -92,7 +103,10 @@
         SELECT
             (SELECT COUNT(*) FROM alarm_rule WHERE del_flag = '0' AND enable_status = '1') as "enableRuleCount",
             (SELECT COUNT(*) FROM alarm_record WHERE recover_status = '0') as "unrecoveredAlarmCount",
-            (SELECT COUNT(*) FROM alarm_record WHERE trigger_time >= CURRENT_DATE) as "todayAlarmTotal"
+            (SELECT COUNT(*) FROM alarm_record WHERE trigger_time >= CURRENT_DATE) as "todayAlarmTotal",
+            (SELECT COUNT(*) FROM alarm_record WHERE trigger_time >= CURRENT_DATE AND alarm_level = '1') as "todayInfoCount",
+            (SELECT COUNT(*) FROM alarm_record WHERE trigger_time >= CURRENT_DATE AND alarm_level = '2') as "todayAlarmCount",
+            (SELECT COUNT(*) FROM alarm_record WHERE trigger_time >= CURRENT_DATE AND alarm_level = '3') as "todaySeverityCount"
     </select>
 
 
@@ -100,27 +114,42 @@
     <select id="selectEnabledRules" resultMap="BaseResultMap">
         SELECT
             rule_id, rule_name, metric_key, metric_name, compare_type, threshold, unit,
+            collect_interval, duration, silence_duration,
             alarm_level, scope_type, scope_instance_id, enable_status, del_flag,
             created_time, updated_time
         FROM alarm_rule
-        WHERE enable_status = 1
-        AND del_flag = 0
+        WHERE enable_status = '1'
+        AND del_flag = '0'
     </select>
 
     <!-- 查询启用中的、适用于指定实例的告警规则 -->
     <select id="selectEnabledRulesByInstance" resultMap="BaseResultMap">
         SELECT
             rule_id, rule_name, metric_key, metric_name, compare_type, threshold, unit,
+            collect_interval, duration, silence_duration,
             alarm_level, scope_type, scope_instance_id, enable_status, del_flag,
             created_time, updated_time
         FROM alarm_rule
-        WHERE enable_status = 1
-        AND del_flag = 0
+        WHERE enable_status = '1'
+        AND del_flag = '0'
         AND (
         scope_type = '1'
         OR CONCAT(',', REPLACE(scope_instance_id, ' ', ''), ',')
         LIKE CONCAT('%,', #{instanceId}, ',%')
         )
+    </select>
+
+    <!-- 按指标查询启用中的规则（新增规则重复校验用） -->
+    <select id="selectEnabledRulesByMetric" resultMap="BaseResultMap">
+        SELECT
+            rule_id, rule_name, metric_key, metric_name, compare_type, threshold, unit,
+            collect_interval, duration, silence_duration,
+            alarm_level, scope_type, scope_instance_id, enable_status, del_flag,
+            created_time, updated_time
+        FROM alarm_rule
+        WHERE enable_status = '1'
+        AND del_flag = '0'
+        AND metric_key = #{metricKey}
     </select>
 
 </mapper>

@@ -1,7 +1,35 @@
 server:
   port: 8100
 
-spring:
+platform: #临时
+  instance:
+    offline-threshold-seconds: 70      # 实例/哨兵离线判定阈值（秒）
+  alarm:
+    notice:
+      enabled: false                    # 告警邮件通知开关
+      receivers:                        # 接收人列表
+        - ops@example.com
+    auto-recover:
+      periods: 2                        #连续回落周期数，达到后自动恢复；<=0 关闭自动恢复
+
+#platform:
+  register-code: Danuvius
+  retain-days: 7
+  report:
+    export-dir: ./exports
+    download-prefix: /report/download
+
+
+spring: #临时
+  mail:                                 # 启用邮件通知时配置
+    host: smtp.example.com
+    username: notice@example.com
+    password: xxxx
+
+
+
+
+#spring:
   application:
     name: redis-monitor-platform
   datasource:
@@ -23,12 +51,12 @@ mybatis-plus:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
-platform:
-  register-code: Danuvius
-  retain-days: 7
-  report:
-    export-dir: ./exports
-    download-prefix: /report/download
+
+
+
+
+
+
 
 logging:
   level:

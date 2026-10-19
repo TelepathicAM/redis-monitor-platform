@@ -21,6 +21,11 @@ public class GlobalExceptionHandler {
         return ResultUtils.error(e.getCode(), e.getMessage());
     }
 
+    @ExceptionHandler(ParameterException.class)
+    public BaseResponse<?> handleParameterException(ParameterException e) {
+        return ResultUtils.error(e.getCode(), e.getMsg());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public BaseResponse<?> handleValidException(MethodArgumentNotValidException e) {
         FieldError fieldError = e.getBindingResult().getFieldError();

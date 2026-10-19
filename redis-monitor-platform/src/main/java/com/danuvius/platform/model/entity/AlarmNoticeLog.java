@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
 @TableName("alarm_notice_log")
 public class AlarmNoticeLog {
 
-    @TableId(type = IdType.INPUT)
+    @TableId(type = IdType.ASSIGN_ID)
     private String id;
 
     /** 告警记录id */

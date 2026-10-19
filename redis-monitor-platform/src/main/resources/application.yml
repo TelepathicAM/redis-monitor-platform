@@ -9,7 +9,8 @@ platform: #临时
       enabled: false                    # 告警邮件通知开关
       receivers:                        # 接收人列表
         - ops@example.com
-
+    auto-recover:
+      periods: 2                        #连续回落周期数，达到后自动恢复；<=0 关闭自动恢复
 
 #platform:
   register-code: Danuvius

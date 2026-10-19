@@ -12,7 +12,7 @@ public class RecordPageRequest {
     private String instanceId;
 
     /** 告警级别（可选） */
-    private Integer alarmLevel;
+    private String alarmLevel;
 
     /** 指标 key（可选） */
     private String metricKey;

@@ -4,10 +4,15 @@ import com.danuvius.platform.model.dto.monitor.ReportEventDTO;
 import com.danuvius.platform.model.dto.monitor.ReportOverviewDTO;
 import com.danuvius.platform.model.dto.monitor.ReportQueryResponse;
 import com.danuvius.platform.model.dto.monitor.ReportTrendDTO;
+import com.lowagie.text.Document;
+import com.lowagie.text.Font;
+import com.lowagie.text.Paragraph;
+import com.lowagie.text.pdf.PdfWriter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -19,11 +24,6 @@ import java.util.List;
 /**
  * 报告文件生成器。
  * 导出内容与查询条件一致：概览统计、指标趋势图、告警与切换明细、节点可用率。
- * 导出类型说明：
- * - excel：生成 CSV（UTF-8 带 BOM，Excel 可直接打开），含全部数据表；
- * - pdf：生成 HTML 报告（内嵌 SVG 趋势图，浏览器打开后可打印/另存为 PDF）。
- * 若后续需要标准 PDF/xlsx，可在此类中扩展（或引入 OpenPDF/EasyXML 依赖后替换生成实现），
- * 对外接口不变。
  */
 @Slf4j
 @Component
@@ -33,80 +33,20 @@ public class ReportFileGenerator {
 
     /**
      * 生成导出文件。
-     *
-     * @param exportType pdf / excel
      * @return 生成的文件
      */
-    public File generate(String exportType, ReportQueryResponse report, String instanceId,
+    public File generate(ReportQueryResponse report, String instanceId,
                          String reportType, String exportDir) throws IOException {
         File dir = new File(exportDir);
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IOException("创建导出目录失败: " + exportDir);
         }
-        String suffix = "pdf".equalsIgnoreCase(exportType) ? "html" : "csv";
         File file = new File(dir, "redis-report-" + instanceId + "-" + reportType + "-"
-                + System.currentTimeMillis() + "." + suffix);
-        if ("pdf".equalsIgnoreCase(exportType)) {
-            writeHtml(file, report, instanceId, reportType);
-        } else {
-            writeCsv(file, report);
-        }
+                + System.currentTimeMillis() + ".pdf");
+        writePdf(file, report, instanceId, reportType);
         return file;
     }
 
-    // ---------------------------------------------------------------- CSV
-
-    private void writeCsv(File file, ReportQueryResponse report) throws IOException {
-        try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(file.toPath(), StandardCharsets.UTF_8))) {
-            // UTF-8 BOM，保证 Excel 中文不乱码
-            writer.write('\ufeff');
-
-            writer.println("Redis 运行报告 - 概览统计");
-            writer.println("指标,平均值,峰值,峰值时间");
-            ReportOverviewDTO ov = report.getOverview();
-            if (ov != null) {
-                writer.println("CPU使用率(%)," + nullSafe(ov.getCpuAvg()) + "," + nullSafe(ov.getCpuMax()) + "," + fmt(ov.getCpuMaxTim()));
-                writer.println("Redis内存使用量(GB)," + nullSafe(ov.getRedisMemAvg()) + "," + nullSafe(ov.getRedisMemMax()) + "," + fmt(ov.getRedisMemMaxTim()));
-                writer.println("QPS(次/秒)," + nullSafe(ov.getQpsAvg()) + "," + nullSafe(ov.getQpsMax()) + "," + fmt(ov.getQpsMaxTim()));
-                writer.println("平均延迟(ms)," + nullSafe(ov.getLatencyAvg()) + "," + nullSafe(ov.getLatencyMax()) + "," + fmt(ov.getLatencyMaxTim()));
-                writer.println();
-                writer.println("告警总次数," + nullSafe(ov.getAlarmTotal()));
-                writer.println("主从切换总次数," + nullSafe(ov.getSwitchTotal()));
-                writer.println("最近切换时间," + fmt(ov.getLastSwitchTime()));
-                writer.println("Redis服务可用率(%)," + nullSafe(ov.getServiceAvailableRate()));
-                writer.println("主节点数," + nullSafe(ov.getMasterCount()));
-                writer.println("从节点数," + nullSafe(ov.getReplicaCount()));
-            }
-            writer.println();
-
-            writer.println("指标趋势");
-            List<ReportTrendDTO> trends = report.getTrendList();
-            if (trends != null) {
-                for (ReportTrendDTO trend : trends) {
-                    writer.println(trend.getMetricName() + "(" + trend.getUnit() + ")");
-                    writer.println("时间,数值");
-                    if (trend.getTimestampList() != null && trend.getValueList() != null) {
-                        int size = Math.min(trend.getTimestampList().size(), trend.getValueList().size());
-                        for (int i = 0; i < size; i++) {
-                            writer.println(trend.getTimestampList().get(i) + "," + nullSafe(trend.getValueList().get(i)));
-                        }
-                    }
-                    writer.println();
-                }
-            }
-
-            writer.println("告警与主从切换明细");
-            writer.println("事件类型,节点,内容,发生时间,状态");
-            List<ReportEventDTO> events = report.getEventList();
-            if (events != null) {
-                for (ReportEventDTO event : events) {
-                    writer.println(csvCell(event.getEventType()) + "," + csvCell(event.getNodeDisplay()) + ","
-                            + csvCell(event.getContent()) + "," + fmt(event.getHappenTime()) + ","
-                            + csvCell(event.getStatus()));
-                }
-            }
-        }
-    }
 
     // ---------------------------------------------------------------- HTML
 
@@ -177,6 +117,69 @@ public class ReportFileGenerator {
         sb.append("</body></html>");
         Files.write(file.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
     }
+
+    private void writePdf(File file, ReportQueryResponse report, String instanceId,
+                          String reportType) throws IOException {
+        Document document = new Document();
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            PdfWriter.getInstance(document, out);
+            document.open();
+            Font h1 = new Font(Font.HELVETICA, 16, Font.BOLD);
+            Font h2 = new Font(Font.HELVETICA, 12, Font.BOLD);
+
+            document.add(new Paragraph("Redis 运行报告（" + reportType + "）", h1));
+            document.add(new Paragraph("实例：" + instanceId + "　生成时间："
+                    + LocalDateTime.now().format(FORMATTER)));
+
+            ReportOverviewDTO ov = report.getOverview();
+            document.add(new Paragraph("一、概览统计", h2));
+            if (ov != null) {
+                document.add(new Paragraph("CPU平均使用率(%)：" + nullSafe(ov.getCpuAvg())
+                        + "　峰值：" + nullSafe(ov.getCpuMax()) + "　" + fmt(ov.getCpuMaxTim())));
+                document.add(new Paragraph("Redis内存平均使用量(GB)：" + nullSafe(ov.getRedisMemAvg())
+                        + "　峰值：" + nullSafe(ov.getRedisMemMax()) + "　" + fmt(ov.getRedisMemMaxTim())));
+                document.add(new Paragraph("QPS平均值(次/秒)：" + nullSafe(ov.getQpsAvg())
+                        + "　峰值：" + nullSafe(ov.getQpsMax()) + "　" + fmt(ov.getQpsMaxTim())));
+                document.add(new Paragraph("平均延迟(ms)：" + nullSafe(ov.getLatencyAvg())
+                        + "　峰值：" + nullSafe(ov.getLatencyMax()) + "　" + fmt(ov.getLatencyMaxTim())));
+                document.add(new Paragraph("告警总次数：" + nullSafe(ov.getAlarmTotal())
+                        + "　主从切换总次数：" + nullSafe(ov.getSwitchTotal())
+                        + "　可用率(%)：" + nullSafe(ov.getServiceAvailableRate())
+                        + "　主节点数：" + nullSafe(ov.getMasterCount())
+                        + "　从节点数：" + nullSafe(ov.getReplicaCount())));
+            }
+
+            document.add(new Paragraph("二、指标趋势", h2));
+            List<ReportTrendDTO> trends = report.getTrendList();
+            if (trends != null) {
+                for (ReportTrendDTO trend : trends) {
+                    document.add(new Paragraph(trend.getMetricName() + "(" + trend.getUnit() + ")"));
+                    // 如需趋势图，用 OpenPDF 的 LineChart/绘图 API，或嵌入预生成图片；
+                    // 文本先输出首尾值，避免依赖图形库
+                    List<Double> vals = trend.getValueList();
+                    if (vals != null && !vals.isEmpty()) {
+                        document.add(new Paragraph("  首值：" + vals.get(0)
+                                + "　末值：" + vals.get(vals.size() - 1)));
+                    }
+                }
+            }
+
+            document.add(new Paragraph("三、告警与主从切换明细", h2));
+            List<ReportEventDTO> events = report.getEventList();
+            if (events != null) {
+                for (ReportEventDTO event : events) {
+                    document.add(new Paragraph(
+                            event.getEventType() + " | " + event.getNodeDisplay() + " | "
+                                    + event.getContent() + " | " + fmt(event.getHappenTime())
+                                    + " | " + event.getStatus()));
+                }
+            }
+            document.close();
+        } catch (Exception e) {
+            throw new IOException("生成 PDF 失败: " + e.getMessage(), e);
+        }
+    }
+
 
     private void appendCard(StringBuilder sb, String name, Object avg, Object max, LocalDateTime maxTime) {
         sb.append("<div class=\"card\"><div>").append(escape(name)).append("</div>")
@@ -277,15 +280,6 @@ public class ReportFileGenerator {
         return time == null ? "" : time.format(FORMATTER);
     }
 
-    private String csvCell(String value) {
-        if (value == null) {
-            return "";
-        }
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
-        }
-        return value;
-    }
 
     private String escape(String value) {
         if (value == null) {

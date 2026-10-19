@@ -10,7 +10,7 @@
         <result column="cpu_per"        property="cpuPer"/>
         <result column="mem_server_per" property="memServerPer"/>
         <result column="mem_us"         property="memUs"/>
-        <result column="cmd_latency"    property="latency"/>
+        <result column="latency"    property="latency"/>
         <result column="io_iik"         property="ioIik"/>
         <result column="io_iok"         property="ioIok"/>
         <result column="ops"            property="ops"/>
@@ -27,7 +27,7 @@
 
     <!-- 通用查询列 -->
     <sql id="Base_Column_List">
-        id, instance_id, tm, cpu_per, mem_server_per, mem_us, cmd_latency,
+        id, instance_id, tm, cpu_per, mem_server_per, mem_us, latency,
         io_iik, io_iok, ops, role, redis_version, run_id, master_host, master_port,
         repl_delay, collect_type, created_time, updated_time
     </sql>
@@ -53,7 +53,7 @@
                    WHEN #{metricKey} = 'serverMemUsage'    THEN mem_server_per
                    WHEN #{metricKey} = 'redisMemUsed'      THEN mem_us
                    WHEN #{metricKey} = 'qps'               THEN ops
-                   WHEN #{metricKey} = 'avgLatency'        THEN cmd_latency
+                   WHEN #{metricKey} = 'avgLatency'        THEN latency
                    WHEN #{metricKey} = 'netInputBandwidth' THEN io_iik
                    WHEN #{metricKey} = 'netOutputBandwidth' THEN io_iok
                    WHEN #{metricKey} = 'replDelay'         THEN repl_delay
@@ -74,7 +74,7 @@
                 WHEN #{metricKey} = 'serverMemUsage'     THEN mem_server_per
                 WHEN #{metricKey} = 'redisMemUsed'       THEN mem_us
                 WHEN #{metricKey} = 'qps'                THEN ops
-                WHEN #{metricKey} = 'avgLatency'         THEN cmd_latency
+                WHEN #{metricKey} = 'avgLatency'         THEN latency
                 WHEN #{metricKey} = 'netInputBandwidth'  THEN io_iik
                 WHEN #{metricKey} = 'netOutputBandwidth' THEN io_iok
                 WHEN #{metricKey} = 'replDelay'          THEN repl_delay

@@ -51,6 +51,8 @@ public interface RedisInstanceMapper extends BaseMapper<RedisInstance> {
                                                 @Param("bucketMinutes") int bucketMinutes,
                                                 @Param("truncateDay") boolean truncateDay);
 
+    RedisInstance selectByInstanceId(@Param("instanceId") String instanceId);
+
     /** 查询纳管中的实例,用于拓扑 */
     List<RedisInstance> selectActiveInstances(@Param("managementStatus") String managementStatus);
 
@@ -59,6 +61,8 @@ public interface RedisInstanceMapper extends BaseMapper<RedisInstance> {
 
     /* 按实例id批量查询实例,用于规则生效节点名称回显 */
     List<RedisInstance> selectInstancesByIds(@Param("instanceIds") List<String> instanceIds);
+
+
 
     /* 更新实例心跳时间与运行状态,采集上报/心跳时维护 */
     int updateHeartbeatAndStatus(@Param("instanceId") String instanceId,

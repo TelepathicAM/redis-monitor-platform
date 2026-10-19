@@ -12,7 +12,7 @@ public class MetricCurrentValueDTO implements Serializable {
     private Object currentValue;
     private String unit;
     /** 正常 / 提示 / 警告 / 严重 / 无数据 */
-    private String alarmLevel;
+    private String metricStatus;
     /** 环比 5 分钟变化率（%） */
     private Double changeRate5min;
 }

@@ -132,7 +132,7 @@ public class AlarmNoticeServiceImpl extends ServiceImpl<AlarmNoticeLogMapper, Al
                                String sendStatus, String failReason) {
         try {
             AlarmNoticeLog noticeLog = new AlarmNoticeLog();
-            noticeLog.setId(UUID.randomUUID().toString().replace("-", ""));
+
             noticeLog.setAlarmRecordId(record.getId());
             noticeLog.setAlarmNo(record.getAlarmNo());
             noticeLog.setNoticeType(NOTICE_TYPE_MAIL);

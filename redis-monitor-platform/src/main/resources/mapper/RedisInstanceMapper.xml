@@ -38,7 +38,7 @@
         mem_server_per AS "serverMemUsage",
         mem_us         AS "redisMemUsed",
         ops            AS "qps",
-        cmd_latency    AS "avgLatency",
+        latency        AS "avgLatency",
         io_iik         AS "netInputBandwidth",
         io_iok         AS "netOutputBandwidth"
     </sql>
@@ -82,7 +82,7 @@
                 WHEN #{metricKey} = 'serverMemUsage'    THEN mem_server_per
                 WHEN #{metricKey} = 'redisMemUsed'      THEN mem_us
                 WHEN #{metricKey} = 'qps'               THEN ops
-                WHEN #{metricKey} = 'avgLatency'        THEN cmd_latency
+                WHEN #{metricKey} = 'avgLatency'        THEN latency
                 WHEN #{metricKey} = 'netInputBandwidth' THEN io_iik
                 WHEN #{metricKey} = 'netOutputBandwidth' THEN io_iok
                 END)                              AS "value"
@@ -108,8 +108,8 @@
                   AND tm BETWEEN #{startTime} AND #{endTime}
                 ORDER BY cpu_per DESC
                 LIMIT 1)        AS "cpuMaxTim",
-               AVG(mem_us)      AS "redisMemAvg",
-               MAX(mem_us)      AS "redisMemMax",
+               AVG(mem_us)/1024.0/1024/1024 AS "redisMemAvg",
+               MAX(mem_us)/1024.0/1024/1024 AS "redisMemMax",
                (SELECT tm
                 FROM rms_metric_log
                 WHERE instance_id = #{instanceId}
@@ -124,13 +124,13 @@
                   AND tm BETWEEN #{startTime} AND #{endTime}
                 ORDER BY ops DESC
                 LIMIT 1)        AS "qpsMaxTim",
-               AVG(cmd_latency) AS "latencyAvg",
-               MAX(cmd_latency) AS "latencyMax",
+               AVG(latency) AS "latencyAvg",
+               MAX(latency) AS "latencyMax",
                (SELECT tm
                 FROM rms_metric_log
                 WHERE instance_id = #{instanceId}
                   AND tm BETWEEN #{startTime} AND #{endTime}
-                ORDER BY cmd_latency DESC
+                ORDER BY latency DESC
                 LIMIT 1)        AS "latencyMaxTim",
                COUNT(*)         AS "collectCount"
         FROM rms_metric_log
@@ -144,10 +144,10 @@
             <when test="truncateDay">date_trunc('day', tm)</when>
             <otherwise><include refid="bucketExpr"/></otherwise>
         </choose> AS "bucket",
-               AVG(cpu_per)     AS "cpu",
-               AVG(mem_us)      AS "redisMem",
-               AVG(ops)         AS "qps",
-               AVG(cmd_latency) AS "latency"
+               AVG(cpu_per)                     AS "cpuUsage",
+               AVG(mem_us)/1024.0/1024/1024     AS "redisMemUsed",
+               AVG(ops)                         AS "qps",
+               AVG(latency)                     AS "avgLatency"
         FROM rms_metric_log
         WHERE instance_id = #{instanceId}
           AND tm BETWEEN #{startTime} AND #{endTime}
@@ -175,6 +175,15 @@
             updated_time = #{lastHeartbeatTime}
         WHERE instance_id = #{instanceId}
     </update>
+
+    <select id="selectByInstanceId" resultType="com.danuvius.platform.model.entity.RedisInstance">
+        SELECT id, instance_id, instance_name, host_ip, redis_port, role, redis_version,
+               run_status, master_host_ip, master_redis_port, last_heartbeat_time,
+               management_status, created_time, updated_time
+        FROM redis_instance
+        WHERE instance_id = #{instanceId}
+        LIMIT 1
+    </select>
 
     <select id="selectActiveInstances" resultType="com.danuvius.platform.model.entity.RedisInstance">
         SELECT id, instance_id, instance_name, host_ip, redis_port, role, redis_version,

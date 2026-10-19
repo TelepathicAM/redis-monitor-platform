@@ -14,14 +14,16 @@ import com.danuvius.platform.model.enums.AlarmLevelEnum;
 import com.danuvius.platform.model.enums.MetricTypeEnum;
 import com.danuvius.platform.model.enums.StatusEnum;
 import com.danuvius.platform.model.enums.TypeEnum;
+import com.danuvius.platform.service.AsyncTaskRunner;
 import com.danuvius.platform.service.AuditLogService;
 import com.danuvius.platform.service.RedisInstanceService;
-import com.danuvius.platform.service.ReportExportExecutor;
 import com.danuvius.platform.util.*;
 import com.github.benmanes.caffeine.cache.Cache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.io.File;
 import java.math.BigDecimal;
@@ -52,8 +54,11 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
     private final AuditLogService auditLogService;
     /* 报告导出异步任务存储 */
     private final ReportExportTaskHolder taskHolder;
-    /* 报告导出异步执行器（独立Bean保证@Async生效） */
-    private final ReportExportExecutor reportExportExecutor;
+    /* 报告导出文件生成器（异步任务内使用） */
+    private final ReportFileGenerator reportFileGenerator;
+    /* 通用异步任务执行器（独立Bean保证@Async生效） */
+    private final AsyncTaskRunner asyncTaskRunner;
+
 
     private final Cache<String, Object> caffeineCache;
 
@@ -65,7 +70,8 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
                                     RuleMatchHelper ruleMatchHelper,
                                     AuditLogService auditLogService,
                                     ReportExportTaskHolder taskHolder,
-                                    ReportExportExecutor reportExportExecutor,
+                                    ReportFileGenerator reportFileGenerator,
+                                    AsyncTaskRunner asyncTaskRunner,
                                     Cache<String, Object> caffeineCache
     ) {
         this.instanceMapper = instanceMapper;
@@ -76,7 +82,8 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         this.ruleMatchHelper = ruleMatchHelper;
         this.auditLogService = auditLogService;
         this.taskHolder = taskHolder;
-        this.reportExportExecutor = reportExportExecutor;
+        this.reportFileGenerator = reportFileGenerator;
+        this.asyncTaskRunner = asyncTaskRunner;
         this.caffeineCache = caffeineCache;
     }
 
@@ -118,7 +125,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
      */
     @Override
     public MetricCurrentValueResponse getCurrentValues(String instanceId) {
-        RedisInstance inst = instanceMapper.selectById(instanceId);
+        RedisInstance inst = instanceMapper.selectByInstanceId(instanceId);
         if (inst == null) {
             throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "实例不存在");
         }
@@ -151,8 +158,17 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         }
 
         List<MetricCurrentValueDTO> metrics = new ArrayList<>();
-
-        for (MetricTypeEnum metricType : MetricTypeEnum.values()) {
+        MetricTypeEnum[] coreMetrics = {
+                MetricTypeEnum.CPU_USAGE,
+                MetricTypeEnum.SERVER_MEM_USAGE,
+                MetricTypeEnum.REDIS_MEM_USED,
+                MetricTypeEnum.QPS,
+                MetricTypeEnum.AVG_LATENCY,
+                MetricTypeEnum.NET_INPUT_BANDWIDTH,
+                MetricTypeEnum.NET_OUTPUT_BANDWIDTH
+        };
+        //只遍历核心指标
+        for (MetricTypeEnum metricType : coreMetrics) {
             MetricCurrentValueDTO m = new MetricCurrentValueDTO();
             m.setMetricKey(metricType.getKey());
             m.setMetricName(metricType.getName());
@@ -167,9 +183,9 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
 
             //判断是否有数据
             if (latest == null || cur == null) {
-                m.setAlarmLevel(AlarmLevelEnum.NO_DATA.getDesc());
+                m.setMetricStatus(AlarmLevelEnum.NO_DATA.getDesc());
             } else {
-                m.setAlarmLevel(judgeMetricStatus(cur, metricType.getKey(), boundRules));
+                m.setMetricStatus(judgeMetricStatus(cur, metricType.getKey(), boundRules));
             }
 
             //旧值
@@ -213,7 +229,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return AlarmLevelEnum.NORMAL.getDesc();
         }
 
-        Double maxLevel = ParseUtils.stringToDouble(AlarmLevelEnum.NORMAL.getCode());
+        Integer maxLevel = ParseUtils.stringToInteger(AlarmLevelEnum.NORMAL.getCode());
 
         for (AlarmRule rule : rules) {
             if (!metricKey.equals(rule.getMetricKey()) || rule.getThreshold() == null) {
@@ -231,14 +247,14 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             triggered=CompareUtil.compareValue(value,compareType,threshold);
 
             if (triggered && rule.getAlarmLevel() != null) {
-                Double level = ParseUtils.stringToDouble(AlarmLevelEnum.codeOf((rule.getAlarmLevel())));
+                Integer level = ParseUtils.stringToInteger(AlarmLevelEnum.codeOf((rule.getAlarmLevel())));
                 if (level > maxLevel) {
                     maxLevel = level;
                 }
             }
         }
 
-        return AlarmLevelEnum.descOf(ParseUtils.doubleToString(maxLevel));
+        return AlarmLevelEnum.descOf(String.valueOf(maxLevel));
     }
 
     /**
@@ -380,7 +396,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return new java.sql.Timestamp(((Date) bucket).getTime()).toLocalDateTime().format(FORMATTER);
         }
         String text = bucket.toString();
-        // 兼容 "2026-10-15 10:05:00.0" 形式
+        // 兼容 "yyyy-MM-dd HH:mm:ss.0" 形式
         if (text.length() > 19) {
             text = text.substring(0, 19);
         }
@@ -459,7 +475,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
 
         TopologyResponse resp = new TopologyResponse();
         resp.setNodes(nodes);
-        resp.setStatus(topologyStatus);
+        resp.setTopologyStatus(topologyStatus);
         resp.setLastSwitch(lastEvent);
 
         caffeineCache.put(CacheKeyUtil.TOPOLOGY, resp);
@@ -487,11 +503,6 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         List<NodeStatusResponse> masterRows = new ArrayList<>();
         List<NodeStatusResponse> slaveRows = new ArrayList<>();
 
-        /* 用实例列表构建 host:port -> instanceId 映射，反查主节点实例id */
-        Map<String, String> hostPortToInstanceId = new HashMap<>();
-        for (RedisInstance i : instances) {
-            hostPortToInstanceId.put(i.getHostIp() + ":" + i.getRedisPort(), i.getInstanceId());
-        }
 
         String masterIp = null;
         String masterPort = null;
@@ -506,8 +517,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             // masterName 拼接为 host:port
             masterIp = i.getMasterHostIp() == null ? "null" : i.getMasterHostIp();
             masterPort = i.getMasterRedisPort() == null ? "null" : i.getMasterRedisPort();
-            String masterInstanceId = hostPortToInstanceId.get(masterIp + ":" + masterPort);
-            m.setMasterName(masterInstanceId != null ? masterInstanceId : masterIp);
+            m.setMasterName(masterIp + ":" + masterPort);
 
             //复制延迟从 rms_metric_log 最新记录获取
             String replDelay = getLatestReplDelay(i.getInstanceId());
@@ -708,8 +718,8 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             for (Map<String, Object> row : alarmRows) {
                 ReportEventDTO event = new ReportEventDTO();
                 event.setEventType(TypeEnum.ALARM.getDesc());
-                String instanceId = (String) row.get("instanceId");
-                event.setNodeDisplay((instanceId == null ? "" : instanceId));
+                String instanceName = (String) row.get("instanceName");
+                event.setNodeDisplay((instanceName == null ? "" : instanceName));
                 event.setContent(str(row.get("alarmContent")));
                 event.setHappenTime(toLocalDateTime(row.get("triggerTime")));
                 event.setStatus("1".equals(row.get("recoverStatus")) ? StatusEnum.RECOVER.getDesc() : StatusEnum.UNRECOVER.getDesc());
@@ -724,7 +734,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
                 event.setContent(event.getEventType()+"：" + event.getNodeDisplay()
                         + "（" + TypeEnum.descOf(str(row.get("switchType"))) + "）");
                 event.setHappenTime(toLocalDateTime(row.get("switchTime")));
-                event.setStatus("1".equals(row.get("switchResult")) ? StatusEnum.SUCCESS.getCode() : StatusEnum.FAILED.getCode());
+                event.setStatus("1".equals(row.get("switchResult")) ? StatusEnum.SUCCESS.getDesc() : StatusEnum.FAILED.getDesc());
                 events.add(event);
             }
         }
@@ -806,16 +816,51 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
      * 任务与文件30分钟有效；原实现为占位空任务。
      */
     @Override
-    public ReportExportResponse exportReport(String instanceId, String reportType, String exportType) {
+    public ReportExportResponse exportReport(String instanceId, String reportType) {
         String taskId = "export_" + System.currentTimeMillis();
         ReportExportTaskHolder.ExportTask task = taskHolder.createTask(taskId);
-        // 异步执行（ReportExportExecutor 为独立 Bean，保证 @Async 生效）
-        reportExportExecutor.run(taskId, instanceId, reportType, exportType);
+        // 异步执行（AsyncTaskRunner 为独立 Bean，保证 @Async 生效）
+        asyncTaskRunner.run(() -> doExport(taskId, instanceId, reportType));
 
         ReportExportResponse resp = new ReportExportResponse();
         resp.setTaskId(taskId);
         resp.setTaskStatus(task.getTaskStatus());
         return resp;
+    }
+
+    /**
+     * 报告导出异步任务执行体：生成文件并更新任务状态。
+     * 逻辑由原 ReportExportExecutor.run 迁入，行为保持不变。
+     */
+    private void doExport(String taskId, String instanceId, String reportType) {
+        ReportExportTaskHolder.ExportTask task = taskHolder.getTask(taskId);
+        if (task == null) {
+            return;
+        }
+        try {
+            log.info("[报告导出] 异步任务开始, taskId={}, instanceId={}, reportType={}",
+                    taskId, instanceId, reportType);
+
+            // 复用报告查询逻辑获取完整报告数据
+            ReportQueryResponse report = buildReportData(instanceId, reportType);
+            File file = reportFileGenerator.generate(report, instanceId, reportType,
+                    taskHolder.exportDir());
+
+            task.setFilePath(file.getAbsolutePath());
+            task.setFileName(file.getName());
+            task.setDownloadUrl("/api/monitor/report/export/download?taskId=" + taskId);
+            task.setTaskStatus("success");
+
+            /* 将操作人、文件id、报告类型、导出实例、时间范围、操作类型、操作时间记入操作审计日志 */
+            auditLogService.record("报告导出", "导出", taskId,
+                    "导出Redis运行报告，实例：" + instanceId + "，报告类型：" + reportType);
+
+            log.info("[报告导出] 异步任务完成, taskId={}, file={}", taskId, file.getAbsolutePath());
+        } catch (Exception e) {
+            task.setTaskStatus("fail");
+            task.setFailReason(e.getMessage());
+            log.error("[报告导出] 异步任务失败, taskId={}", taskId, e);
+        }
     }
 
     /**
@@ -879,7 +924,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return "正常";
         }
 
-        boolean hasRule = false;
+        //判断是否有规则被触发
         for (AlarmRule rule : rules) {
             if (!REPL_DELAY_METRIC_KEY.equals(rule.getMetricKey())) {
                 continue;
@@ -887,7 +932,6 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             if (!ruleMatchHelper.isRuleApplyToInstance(rule, instanceId)) {
                 continue;
             }
-            hasRule = true;
             if (rule.getThreshold() == null) {
                 continue;
             }
@@ -902,7 +946,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             }
         }
         // 无规则 / 规则未触发 → 正常
-        return hasRule ? "正常" : "正常";
+        return "正常";
     }
 
 

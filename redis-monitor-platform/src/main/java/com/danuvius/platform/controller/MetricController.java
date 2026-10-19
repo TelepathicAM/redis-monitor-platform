@@ -2,6 +2,8 @@ package com.danuvius.platform.controller;
 
 import com.danuvius.platform.common.BaseResponse;
 import com.danuvius.platform.common.ResultUtils;
+import com.danuvius.platform.common.exception.validator.IdValidator;
+import com.danuvius.platform.common.exception.validator.StringValidator;
 import com.danuvius.platform.model.dto.metric.MetricReportItemDTO;
 import com.danuvius.platform.model.entity.MetricLog;
 import com.danuvius.platform.service.MetricLogService;
@@ -27,6 +29,8 @@ public class MetricController {
      */
     @PostMapping("/report")
     public BaseResponse<String> report(@Valid @RequestBody MetricReportItemDTO req) {
+        StringValidator.notBlank(req.getToken(), "token");
+
         metricLogService.reportMetric(req);
         return ResultUtils.success("OK");
     }
@@ -37,6 +41,8 @@ public class MetricController {
     @GetMapping("/latest/{instanceId}")
     public BaseResponse<MetricLog> latest(
             @PathVariable @NotBlank(message = "instanceId不能为空") String instanceId) {
+        IdValidator.snowflake(instanceId, "instanceId");
+
         return ResultUtils.success(metricLogService.getLatestByInstanceId(instanceId));
     }
 }

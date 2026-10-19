@@ -64,7 +64,13 @@ public class ExecutorInfoServiceImpl extends ServiceImpl<ExecutorInfoMapper, Exe
             instance.setHostIp(ip);
             instance.setRedisPort(port);
 
-            instance.setRole(redisInfo.getOrDefault("role", "MASTER"));
+            String role = redisInfo.getOrDefault("role", "MASTER").toUpperCase();
+            instance.setRole(role);
+            if ("REPLICA".equals(role)) {
+                instance.setMasterHostIp(redisInfo.get("master_host"));
+                instance.setMasterRedisPort(redisInfo.get("master_port"));
+            }
+
             instance.setRedisVersion(redisInfo.getOrDefault("version", ""));
             instance.setRunStatus(StatusEnum.RUN_NORMAL.getCode());
             instance.setManagementStatus("1");
