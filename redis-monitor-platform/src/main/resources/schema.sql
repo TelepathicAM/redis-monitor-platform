@@ -165,14 +165,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_alarm_rule_rule_id ON alarm_rule(rule_id);
 CREATE TABLE IF NOT EXISTS alarm_record (
     id                  character varying(32) PRIMARY KEY NOT NULL,
     alarm_no            character varying(64) NOT NULL,
-    rule_id             character varying(32) NOT NULL,
+    rule_id             character varying(32) ,
     instance_id         character varying(32) NOT NULL,
     metric_key          character varying(64) NOT NULL,
     metric_name         character varying(64) NOT NULL,
     alarm_level         character varying(4) NOT NULL,
     alarm_content       character varying(1024) NOT NULL,
     trigger_value       character varying(32) NOT NULL,
-    threshold           character varying(32) NOT NULL,
+    threshold           character varying(32) ,
     unit                character varying(32),
     trigger_time        timestamp NOT NULL,
     recover_time        timestamp,
@@ -239,7 +239,7 @@ CREATE INDEX IF NOT EXISTS idx_notice_status ON alarm_notice_log(send_status);
 -- ============================================================
 CREATE TABLE IF NOT EXISTS redis_switch_event (
     id                  character varying(32) PRIMARY KEY NOT NULL,
-    old_master_id       character varying(32) NOT NULL,
+    old_master_id       character varying(32) ,
     new_master_id       character varying(32) NOT NULL,
     switch_time         timestamp default CURRENT_TIMESTAMP NOT NULL,
     switch_type         character varying(4) NOT NULL,

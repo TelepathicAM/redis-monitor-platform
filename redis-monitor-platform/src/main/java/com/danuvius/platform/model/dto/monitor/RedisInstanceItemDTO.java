@@ -6,6 +6,9 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.Date;
 
+/**
+ * 前端展示项
+ */
 @Data
 public class RedisInstanceItemDTO implements Serializable {
     /*实例id*/

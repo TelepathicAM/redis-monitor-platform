@@ -2,37 +2,35 @@ package com.danuvius.platform.controller;
 
 import com.danuvius.platform.common.BaseResponse;
 import com.danuvius.platform.common.ResultUtils;
-import com.danuvius.platform.common.exception.validator.CollectionValidator;
+import com.danuvius.platform.common.constant.CommonConstant;
 import com.danuvius.platform.common.exception.validator.IdValidator;
-import com.danuvius.platform.common.exception.validator.ParameterValidator;
 import com.danuvius.platform.common.exception.validator.StringValidator;
 import com.danuvius.platform.model.dto.monitor.*;
 import com.danuvius.platform.service.RedisInstanceService;
 import com.danuvius.platform.service.SentinelNodeInfoService;
+import com.danuvius.platform.util.validate.ReportQueryRequestValidator;
+import com.danuvius.platform.util.validate.TrendRequestValidator;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import javax.validation.Valid;
 import javax.validation.constraints.NotBlank;
 import java.util.List;
+
+
+import javax.servlet.http.HttpServletResponse;
+
+import java.io.File;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
 
 @RestController
 @RequestMapping("/monitor")
 @Slf4j
-@Validated
 public class MonitorController {
-    /** [新增校验] 纳管状态合法值 */
-    private static final String[] MANAGEMENT_STATUS = {"0", "1"};
-    /** [新增校验] 趋势时间范围合法值 */
-    private static final String[] TIME_RANGES = {"近1h", "近6h"};
-    /** [新增校验] 报告类型合法值 */
-    private static final String[] REPORT_TYPES = {"日报", "周报"};
-    /** [新增校验] 趋势指标 key 合法值（与 MetricTypeEnum 采集指标对齐） */
-    private static final String[] TREND_METRIC_KEYS = {
-            "cpuUsage", "serverMemUsage", "redisMemUsed", "qps", "avgLatency",
-            "netInputBandwidth", "netOutputBandwidth"
-    };
+
 
 
     private final RedisInstanceService redisInstanceService;
@@ -51,7 +49,8 @@ public class MonitorController {
     @GetMapping("/redis/instances")
     public BaseResponse<List<RedisInstanceItemDTO>> instances(
             @RequestParam(defaultValue = "1") String managementStatus) {
-        ParameterValidator.in(managementStatus, MANAGEMENT_STATUS, "managementStatus");
+
+        StringValidator.isEnumValue(managementStatus, CommonConstant.MANAGEMENT_STATUS, "managementStatus");
 
         return ResultUtils.success(redisInstanceService.getInstanceList(managementStatus));
     }
@@ -75,14 +74,8 @@ public class MonitorController {
      * @return
      */
     @GetMapping("/realtime/trend")
-    public BaseResponse<TrendResponse> trend(@Valid TrendRequest req) {
-        CollectionValidator.notEmpty(req.getInstanceIds(), "instanceIds");
-        CollectionValidator.maxSize(req.getInstanceIds(), 50, "instanceIds");
-        CollectionValidator.noBlankStringElement(req.getInstanceIds(), "instanceIds");
-        StringValidator.notBlank(req.getMetricKey(), "metricKey");
-        ParameterValidator.in(req.getMetricKey(), TREND_METRIC_KEYS, "metricKey");
-        StringValidator.notBlank(req.getTimeRange(), "timeRange");
-        ParameterValidator.in(req.getTimeRange(), TIME_RANGES, "timeRange");
+    public BaseResponse<TrendResponse> trend( TrendRequest req) {
+        TrendRequestValidator.validate(req);
 
         return ResultUtils.success(redisInstanceService.getTrend(req));
     }
@@ -95,7 +88,7 @@ public class MonitorController {
     @GetMapping("/sentinel/sentinels")
     public BaseResponse<List<SentinelItemResponse>> sentinels(
             @RequestParam(defaultValue = "1") String managementStatus) {
-        ParameterValidator.in(managementStatus, MANAGEMENT_STATUS, "managementStatus");
+        StringValidator.isEnumValue(managementStatus, CommonConstant.MANAGEMENT_STATUS, "managementStatus");
 
         return ResultUtils.success(sentinelNodeInfoService.getSentinelList(managementStatus));
     }
@@ -124,10 +117,8 @@ public class MonitorController {
      * @return
      */
     @PostMapping("/report/query")
-    public BaseResponse<ReportQueryResponse> reportQuery(@Valid @RequestBody ReportQueryRequest req) {
-        IdValidator.snowflake(req.getInstanceId(), "instanceId");
-        StringValidator.notBlank(req.getReportType(), "reportType");
-        ParameterValidator.in(req.getReportType(), REPORT_TYPES, "reportType");
+    public BaseResponse<ReportQueryResponse> reportQuery(@RequestBody ReportQueryRequest req) {
+        ReportQueryRequestValidator.validate(req);
 
         return ResultUtils.success(redisInstanceService.queryReport(req));
     }
@@ -145,7 +136,7 @@ public class MonitorController {
             @RequestParam @NotBlank(message = "instanceId不能为空") String instanceId,
             @RequestParam @NotBlank(message = "reportType不能为空") String reportType) {
         IdValidator.snowflake(instanceId, "instanceId");
-        ParameterValidator.in(reportType, REPORT_TYPES, "reportType");
+        StringValidator.isEnumValue(reportType, CommonConstant.REPORT_TYPES, "reportType");
 
         return ResultUtils.success(
                 redisInstanceService.exportReport(instanceId, reportType));
@@ -157,10 +148,12 @@ public class MonitorController {
     @GetMapping("/report/export/status")
     public BaseResponse<ReportExportResponse> exportStatus(
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId) {
-        IdValidator.prefixed(taskId, "taskId");
+        IdValidator.check(taskId, "taskId",32,"taskId");
 
         return ResultUtils.success(redisInstanceService.queryExportTask(taskId));
     }
+
+
 
     /**
      * 导出文件下载接口,任务成功后返回临时文件，30分钟有效
@@ -168,22 +161,18 @@ public class MonitorController {
     @GetMapping("/report/export/download")
     public void exportDownload(
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId,
-            javax.servlet.http.HttpServletResponse response) throws java.io.IOException {
-        IdValidator.prefixed(taskId, "taskId");
+            HttpServletResponse response) throws IOException {
 
-        java.io.File file = redisInstanceService.getExportFile(taskId);
-        String fileName = java.net.URLEncoder.encode(file.getName(), "UTF-8").replace("+", "%20");
+        IdValidator.check(taskId, "taskId", 32, "taskId");
+
+        File file = redisInstanceService.getExportFile(taskId);
+        String fileName = URLEncoder.encode(file.getName(), StandardCharsets.UTF_8.name())
+                .replace("+", "%20");
 
         response.setContentType("application/pdf");
         response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + fileName);
-        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file.toPath());
-             java.io.OutputStream out = response.getOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = in.read(buffer)) != -1) {
-                out.write(buffer, 0, len);
-            }
-            out.flush();
-        }
+
+        // Files.copy 内部会打开/关闭输入流，且不会关闭 OutputStream
+        Files.copy(file.toPath(), response.getOutputStream());
     }
 }

@@ -33,7 +33,7 @@ public class RuleAddRequest implements Serializable {
     /*生效实例 id 列表，scopeType=2 时有效*/
     private List<String> scopeInstanceIds;
     /*启用状态：true 启用 / false 禁用*/
-    private Boolean enableStatus;
+    private String enableStatus;
     /*创建人*/
     private String createdBy;
 }

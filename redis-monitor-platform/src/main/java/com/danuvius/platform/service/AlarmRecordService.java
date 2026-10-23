@@ -20,12 +20,10 @@ public interface AlarmRecordService extends IService<AlarmRecord> {
     List<RecordItemResponse> getRecent();
 
     /**
-     * 记录概览
-     * @param startTime
-     * @param endTime
+     * 记录页最近3天概览
      * @return
      */
-    RecordOverviewResponse getRecordOverview(String startTime, String endTime);
+    RecordOverviewResponse getRecordOverview();
 
     /**
      * 记录查询分页

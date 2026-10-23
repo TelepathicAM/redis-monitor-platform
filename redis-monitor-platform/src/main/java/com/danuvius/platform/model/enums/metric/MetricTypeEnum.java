@@ -1,4 +1,4 @@
-package com.danuvius.platform.model.enums;
+package com.danuvius.platform.model.enums.metric;
 
 import lombok.Getter;
 

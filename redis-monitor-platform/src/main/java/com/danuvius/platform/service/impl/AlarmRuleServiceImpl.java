@@ -1,17 +1,22 @@
 package com.danuvius.platform.service.impl;
 
+import cn.hutool.core.util.IdUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.danuvius.platform.common.constant.CommonConstant;
 import com.danuvius.platform.common.exception.BusinessCode;
 import com.danuvius.platform.common.exception.BusinessException;
 import com.danuvius.platform.mapper.*;
 import com.danuvius.platform.model.dto.alarm.rule.*;
 import com.danuvius.platform.model.dto.metric.MetricReportItemDTO;
-import com.danuvius.platform.model.entity.AlarmRecord;
-import com.danuvius.platform.model.entity.AlarmRule;
-import com.danuvius.platform.model.entity.ExecutorInfo;
-import com.danuvius.platform.model.entity.RedisInstance;
-import com.danuvius.platform.model.enums.MetricTypeEnum;
+import com.danuvius.platform.model.entity.*;
+import com.danuvius.platform.model.enums.metric.MetricTypeEnum;
 import com.danuvius.platform.model.enums.StatusEnum;
+import com.danuvius.platform.model.enums.rule.EnableStatusEnum;
 import com.danuvius.platform.service.*;
 import com.danuvius.platform.util.CompareUtil;
 import com.danuvius.platform.util.DetectTaskRecorder;
@@ -20,17 +25,20 @@ import com.danuvius.platform.util.RuleMatchHelper;
 import com.danuvius.platform.util.http.AgentCollectResponse;
 import com.danuvius.platform.util.http.AgentHttpClient;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule>
         implements AlarmRuleService {
-    private final AlarmRuleMapper ruleMapper;
+    private final AlarmRuleMapper alarmRuleMapper;
     private final AlarmRecordMapper alarmRecordMapper;
     private final RedisInstanceMapper redisInstanceMapper;
     private final ExecutorInfoMapper executorInfoMapper;
@@ -65,7 +73,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
     @Value("${platform.alarm.auto-recover.periods:2}")
     private int autoRecoverPeriods;
 
-    public AlarmRuleServiceImpl(AlarmRuleMapper ruleMapper,
+    public AlarmRuleServiceImpl(AlarmRuleMapper alarmRuleMapper,
                                 AlarmRecordMapper alarmRecordMapper,
                                 RedisInstanceMapper redisInstanceMapper,
                                 ExecutorInfoMapper executorInfoMapper,
@@ -77,7 +85,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
                                 AuditLogService auditLogService,
                                 DetectTaskRecorder detectTaskRecorder,
                                 AsyncTaskRunner asyncTaskRunner) {
-        this.ruleMapper = ruleMapper;
+        this.alarmRuleMapper = alarmRuleMapper;
         this.alarmRecordMapper = alarmRecordMapper;
         this.redisInstanceMapper = redisInstanceMapper;
         this.executorInfoMapper = executorInfoMapper;
@@ -98,9 +106,8 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public RulePageResponse getRulePage(RuleListRequest req) {
-        int pageNum = req.getPageNum() == null || req.getPageNum() < 1 ? 1 : req.getPageNum();
-        int pageSize = req.getPageSize() == null || req.getPageSize() < 1 ? 12 : req.getPageSize();
-        int offset = (pageNum - 1) * pageSize;
+        int pageNum = req.getPageNum();
+        int pageSize = req.getPageSize();
 
         String keyword = req.getKeyword();
         String alarmLevel=req.getAlarmLevel();
@@ -108,63 +115,56 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         String enableStatus=req.getEnableStatus();
 
 
-        //mapper查规则，返回全记录
-        List<RuleItemDTO> list = ruleMapper.selectRulePage(keyword, alarmLevel, scopeInstanceIds, enableStatus,offset, pageSize);
-        long total = ruleMapper.countRulePage(keyword, alarmLevel, scopeInstanceIds, enableStatus);
+        Page<AlarmRule> page = page(new Page<>(pageNum, pageSize), Wrappers.<AlarmRule>lambdaQuery()
+                .eq(StringUtils.isNotBlank(alarmLevel),AlarmRule::getAlarmLevel, alarmLevel)
+                .eq(StringUtils.isNotBlank(enableStatus),AlarmRule::getEnableStatus, enableStatus)
+                .and(StringUtils.isNotBlank(keyword), i->
+                        i.like(AlarmRule::getRuleName, keyword)
+                                .or()
+                                .like(AlarmRule::getMetricName, keyword)
+                )
+
+                .in(CollectionUtils.isNotEmpty(scopeInstanceIds),AlarmRule::getScopeInstanceId, scopeInstanceIds)
+                .orderByDesc(AlarmRule::getCreatedTime)
+        );
 
         RulePageResponse resp = new RulePageResponse();
-        resp.setTotal(total);
-        resp.setPageNum(pageNum);
-        resp.setPageSize(pageSize);
-        resp.setTotalPages((int) Math.ceil((double) total / pageSize));
+
         /*回显生效实例名称展示数组 scopeInstanceNames */
-        fillScopeInstanceNames(list);
-        resp.setList(list);
+        resp.setScopeInstanceNames(fillScopeInstanceNames(scopeInstanceIds));
+        resp.setPage(page);
         return resp;
     }
 
+
     /**
-     *将规则的生效实例id转换为实例名称数组。
+     * 将 scopeInstanceIds 转换为对应的 instanceName 列表,找不到的 ID 保留原值
      */
-    private void fillScopeInstanceNames(List<RuleItemDTO> list) {
-        if (list == null || list.isEmpty()) {
-            return;
+    private List<String> fillScopeInstanceNames(List<String> scopeInstanceIds) {
+        if (CollectionUtils.isEmpty(scopeInstanceIds)) {
+            return Collections.emptyList();
         }
-        Set<String> allIds = new LinkedHashSet<>();
-        for (RuleItemDTO item : list) {
-            if (item.getScopeInstanceId() == null || item.getScopeInstanceId().trim().isEmpty()) {
-                continue;
-            }
-            for (String id : item.getScopeInstanceId().split(",")) {
-                String trimmed = id.trim();
-                if (!trimmed.isEmpty()) {
-                    allIds.add(trimmed);
-                }
-            }
-        }
-        if (allIds.isEmpty()) {
-            return;
-        }
-        List<RedisInstance> instances = redisInstanceMapper.selectInstancesByIds(new ArrayList<>(allIds));
+
+        //根据scopeInstanceId查表
+        LambdaQueryWrapper<RedisInstance> wrapper = Wrappers.<RedisInstance>lambdaQuery()
+                .select(RedisInstance::getInstanceId,RedisInstance::getInstanceName)
+                .in(RedisInstance::getInstanceId, scopeInstanceIds);
+
+        List<RedisInstance> list = redisInstanceMapper.selectList(wrapper);
+
+        //id name对应
         Map<String, String> idNameMap = new HashMap<>();
-        if (instances != null) {
-            for (RedisInstance instance : instances) {
-                idNameMap.put(instance.getInstanceId(), instance.getInstanceName());
-            }
+        for (RedisInstance instance : list) {
+            idNameMap.put(instance.getInstanceId(), instance.getInstanceName());
         }
-        for (RuleItemDTO item : list) {
-            if (item.getScopeInstanceId() == null || item.getScopeInstanceId().trim().isEmpty()) {
-                continue;
-            }
-            List<String> names = new ArrayList<>();
-            for (String id : item.getScopeInstanceId().split(",")) {
-                String trimmed = id.trim();
-                if (!trimmed.isEmpty()) {
-                    names.add(idNameMap.getOrDefault(trimmed, trimmed));
-                }
-            }
-            item.setScopeInstanceNames(names);
+
+        //按入参顺序一一映射
+        List<String> instanceNames = new ArrayList<>(scopeInstanceIds.size());
+        for (String id : scopeInstanceIds) {
+            instanceNames.add(idNameMap.getOrDefault(id, id));
         }
+        return instanceNames;
+
     }
 
     /**
@@ -178,70 +178,71 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         checkDuplicateRule(req.getMetricKey(), req.getScopeType(), req.getScopeInstanceIds(), null);
 
         AlarmRule rule = new AlarmRule();
-        rule.setRuleId("RL_" + System.currentTimeMillis());
+        rule.setRuleId("RL_" + IdUtil.getSnowflakeNextIdStr());
         rule.setRuleName(req.getRuleName());
         rule.setMetricKey(req.getMetricKey());
+
         MetricTypeEnum metricType = MetricTypeEnum.of(req.getMetricKey());
         if (metricType != null) {
             rule.setMetricName(metricType.getName());
-            if (req.getUnit() == null) {
-                rule.setUnit(metricType.getUnit());
-            }
+
         }
+        rule.setUnit(req.getUnit());
         rule.setCompareType(req.getCompareType());
 
         //Double转String
         rule.setThreshold(ParseUtils.doubleToString(req.getThreshold()));
 
-        rule.setUnit(ParseUtils.defaultIfBlank(req.getUnit(), metricType == null ? null : metricType.getUnit()));
-
-        rule.setCollectInterval(ParseUtils.defaultIfBlank(req.getCollectInterval(), "300"));
-        rule.setDuration(ParseUtils.defaultIfBlank(req.getDuration(), "1"));
-        rule.setAlarmLevel(ParseUtils.defaultIfBlank(req.getAlarmLevel(), "2"));
-        rule.setSilenceDuration(ParseUtils.defaultIfBlank(req.getSilenceDuration(), "1800"));
-        rule.setScopeType(ParseUtils.defaultIfBlank(req.getScopeType(), "1"));
+        rule.setCollectInterval(req.getCollectInterval());
+        rule.setDuration(req.getDuration());
+        rule.setAlarmLevel(req.getAlarmLevel());
+        rule.setSilenceDuration(req.getSilenceDuration());
+        rule.setScopeType(req.getScopeType());
         rule.setScopeInstanceId(ParseUtils.joinIds(req.getScopeInstanceIds()));
-        //默认启用
-        Boolean enableStatus = req.getEnableStatus();
-        rule.setEnableStatus(enableStatus == null ? "1" : (enableStatus ? "1" : "0"));
-        rule.setDelFlag("0");
+        rule.setEnableStatus(req.getEnableStatus());
+
+        rule.setDelFlag(CommonConstant.NOT_DELETED);
 
         rule.setCreatedBy(req.getCreatedBy());
         rule.setCreatedTime(LocalDateTime.now());
-        ruleMapper.insert(rule);
+        alarmRuleMapper.insert(rule);
         /* 将操作人、规则id、规则名、操作类型、操作时间记入操作审计日志 */
-        auditLogService.record("告警规则", "新增", rule.getRuleId(),
+        auditLogService.record(CommonConstant.MODULE_ALARM_RULE, CommonConstant.OPERATION_TYPE_ADD, rule.getRuleId(),
                 "新增告警规则：" + req.getRuleName());
         return rule.getRuleId();
     }
 
+
     /**
-     * 重复规则校验。
-     * 同指标且生效节点存在交集（任一已启用规则作用于待新增规则的任一生效节点）时视为重复。
-     *
-     * @param metricKey        监控指标
-     * @param scopeType        生效范围：1 全部节点 2 指定节点
-     * @param scopeInstanceIds 生效节点列表
-     * @param excludeRuleId    排除的规则id（修改场景排除自身）
+     * 重复规则校验,同指标且生效节点存在交集（任一已启用规则作用于待新增规则的任一生效节点）时视为重复
+     * @param metricKey         监控指标
+     * @param scopeType         生效范围：1 全部节点 2 指定节点
+     * @param scopeInstanceIds  生效节点列表
+     * @param excludeRuleId     排除的规则id（修改场景排除自身）
      */
     private void checkDuplicateRule(String metricKey, String scopeType,
                                     List<String> scopeInstanceIds, String excludeRuleId) {
-        List<AlarmRule> sameMetricRules = ruleMapper.selectEnabledRulesByMetric(metricKey);
-        if (sameMetricRules == null || sameMetricRules.isEmpty()) {
+        if(excludeRuleId ==null) {
             return;
         }
+        List<AlarmRule> sameMetricRules= alarmRuleMapper.selectList(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getEnableStatus,CommonConstant.ENABLE)
+                .eq(AlarmRule::getMetricKey,metricKey)
+        );
+
+
         // 新规则生效节点（scopeType=1 时表示全部节点）
         List<String> newScopeIds = new ArrayList<>();
         if ("1".equals(scopeType)) {
-            List<RedisInstance> all = redisInstanceMapper.selectActiveInstances("1");
-            if (all != null) {
-                for (RedisInstance instance : all) {
+            List<RedisInstance> activeInstances = redisInstanceMapper.selectList(Wrappers.<RedisInstance>lambdaQuery()
+                    .eq(RedisInstance::getManagementStatus,"1"));
+
+            for (RedisInstance instance : activeInstances) {
                     newScopeIds.add(instance.getInstanceId());
-                }
             }
-        } else if (scopeInstanceIds != null) {
+        } else {
             for (String id : scopeInstanceIds) {
-                if (id != null && !id.trim().isEmpty()) {
+                if (!id.trim().isEmpty()) {
                     newScopeIds.add(id.trim());
                 }
             }
@@ -267,43 +268,38 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public boolean updateRule(UpdateRequest req) {
-        AlarmRule rule = ruleMapper.selectByRuleId(req.getRuleId());
+        AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getRuleId, req.getRuleId()));
 
         if (rule == null) throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "规则不存在");
         /* 修改时同样做重复规则校验（排除自身） */
         checkDuplicateRule(req.getMetricKey(), req.getScopeType(), req.getScopeInstanceIds(), rule.getRuleId());
+
         rule.setRuleName(req.getRuleName());
         rule.setMetricKey(req.getMetricKey());
-        MetricTypeEnum metricType = MetricTypeEnum.of(req.getMetricKey());
-        if (metricType != null) {
-            rule.setMetricName(metricType.getName());
-        }
-
+        rule.setMetricName(req.getMetricName());
         rule.setCompareType(req.getCompareType());
-
         rule.setThreshold(ParseUtils.doubleToString(req.getThreshold()));
-
         rule.setUnit(req.getUnit());
-        /* 修改接口入参包含采集间隔 */
-        rule.setCollectInterval(ParseUtils.defaultIfBlank(req.getCollectInterval(), "300"));
+        rule.setCollectInterval(req.getCollectInterval());
         rule.setDuration(req.getDuration());
         rule.setAlarmLevel(req.getAlarmLevel());
         rule.setSilenceDuration(req.getSilenceDuration());
         rule.setScopeType(req.getScopeType());
-
         rule.setScopeInstanceId(ParseUtils.joinIds(req.getScopeInstanceIds()));
-
-        Boolean enable = req.getEnableStatus();
-        if (enable != null) {
-            rule.setEnableStatus(enable ? "1" : "0");
-        }
-
+        rule.setCollectInterval(req.getCollectInterval());
+        rule.setDuration(req.getDuration());
+        rule.setAlarmLevel(req.getAlarmLevel());
+        rule.setSilenceDuration(req.getSilenceDuration());
+        rule.setScopeType(req.getScopeType());
+        rule.setScopeInstanceId(ParseUtils.joinIds(req.getScopeInstanceIds()));
+        rule.setEnableStatus(req.getEnableStatus());
         rule.setUpdatedTime(LocalDateTime.now());
 
-        int rows=ruleMapper.updateById(rule);
+        int rows= alarmRuleMapper.updateById(rule);
         if (rows > 0) {
             /* 操作审计日志记录 */
-            auditLogService.record("告警规则", "修改", rule.getRuleId(),
+            auditLogService.record(CommonConstant.MODULE_ALARM_RULE, CommonConstant.OPERATION_TYPE_UPDATE, rule.getRuleId(),
                     "修改告警规则：" + req.getRuleName());
         }
         return rows > 0;
@@ -318,15 +314,25 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public boolean deleteRule(String ruleId) {
-        AlarmRule rule = ruleMapper.selectByRuleId(ruleId);
+        AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getRuleId, ruleId));
+
         if (rule == null) throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "规则不存在");
-        rule.setDelFlag("1");
-        rule.setUpdatedTime(LocalDateTime.now());
-        int rows=ruleMapper.updateById(rule);
+        int rows = alarmRuleMapper.update(null,
+                new LambdaUpdateWrapper<AlarmRule>()
+                        .set(AlarmRule::getDelFlag, EnableStatusEnum.ENABLE.getCode())
+                        .set(AlarmRule::getUpdatedTime, LocalDateTime.now())
+                        .eq(AlarmRule::getRuleId, ruleId)
+        );
         if (rows > 0) {
             /* 操作审计日志记录 */
-            auditLogService.record("告警规则", "删除", ruleId,
+            auditLogService.record(CommonConstant.MODULE_ALARM_RULE, CommonConstant.OPERATION_TYPE_DELETE, ruleId,
                     "删除告警规则：" + rule.getRuleName());
+        }
+        if (rows == 0) {
+            // 并发下已被删除
+            log.warn("删除告警规则时记录已被并发删除, ruleId={}", ruleId);
+            return false;
         }
         return rows > 0;
     }
@@ -338,17 +344,22 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      * @return
      */
     @Override
-    public boolean toggleStatus(String ruleId, Boolean enableStatus) {
-        AlarmRule rule = ruleMapper.selectByRuleId(ruleId);
+    public boolean toggleStatus(String ruleId, String enableStatus) {
+        AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+        .eq(AlarmRule::getRuleId, ruleId));
+
         if (rule == null) throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "规则不存在");
-        rule.setEnableStatus(Boolean.TRUE.equals(enableStatus) ? "1" : "0");
-        rule.setUpdatedTime(LocalDateTime.now());
-        int rows=ruleMapper.updateById(rule);
+
+        int rows= alarmRuleMapper.update(null,new LambdaUpdateWrapper<AlarmRule>()
+                .set(AlarmRule::getEnableStatus, enableStatus)
+                .set(AlarmRule::getUpdatedTime, LocalDateTime.now())
+                .eq(AlarmRule::getRuleId, ruleId)
+        );
         if (rows > 0) {
             /* 操作审计日志记录 */
-            auditLogService.record("告警规则", "切换", ruleId,
+            auditLogService.record(CommonConstant.MODULE_ALARM_RULE, CommonConstant.OPERATION_TYPE_UPDATE, ruleId,
                     "切换告警规则启用状态：" + rule.getRuleName() + " -> "
-                            + (Boolean.TRUE.equals(enableStatus) ? "启用" : "禁用"));
+                            + ("1".equals(enableStatus) ? CommonConstant.ENABLE_DEC : CommonConstant.DISABLE_DEC));
         }
         return rows > 0;
     }
@@ -366,11 +377,13 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public String triggerCheck(String ruleId) {
-        AlarmRule rule = ruleMapper.selectByRuleId(ruleId);
+        AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getRuleId, ruleId));
+
         if (rule == null) {
             throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "规则不存在");
         }
-        if (!"1".equals(rule.getEnableStatus())) {
+        if (!CommonConstant.ENABLE.equals(rule.getEnableStatus())) {
             throw new BusinessException(BusinessCode.OPERATION_ERROR.getCode(), "规则禁用，无法检测");
         }
         asyncTaskRunner.run(() -> {
@@ -408,8 +421,12 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public void executeSingleCheck(String ruleId) {
-        AlarmRule rule = ruleMapper.selectByRuleId(ruleId);
-        if (rule == null || !"1".equals(rule.getEnableStatus())) {
+        AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getRuleId, ruleId));
+
+
+        //找不到rule 或者规则禁用
+        if (rule == null || CommonConstant.DISABLE.equals(rule.getEnableStatus())) {
             return;
         }
         //解析规则作用范围的实例列表
@@ -427,8 +444,11 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     @Override
     public void executeAllCheck() {
-        List<AlarmRule> rules = ruleMapper.selectEnabledRules();
-        if (rules == null || rules.isEmpty()) {
+        List<AlarmRule> rules= alarmRuleMapper.selectList(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getEnableStatus, CommonConstant.ENABLE)
+        );
+
+        if (rules.isEmpty()) {
             return;
         }
         List<MetricReportItemDTO> collected = collectFromAllExecutors();
@@ -439,7 +459,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
 
     @Override
     public RuleOverviewDTO getRuleOverview() {
-        RuleOverviewDTO dto = ruleMapper.selectRuleOverview();
+        RuleOverviewDTO dto = alarmRuleMapper.selectRuleOverview();
         if (dto == null) {
             dto = new RuleOverviewDTO();
         }
@@ -451,6 +471,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         dto.setTodayAlarmLevelCount(levelCount);
         /* 告警检测任务状态 */
         dto.setDetectTaskStatus(detectTaskRecorder.currentStatus());
+        log.info("规则概览返回-告警检测任务状态：{}",dto.getDetectTaskStatus());
         return dto;
     }
 
@@ -465,10 +486,16 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         if (instanceIds == null || instanceIds.isEmpty()) {
             return collected;
         }
+        List<ExecutorInfo>executors = executorInfoMapper.selectList(new LambdaQueryWrapper<ExecutorInfo>()
+                .in(ExecutorInfo::getInstanceId, instanceIds)
+        );
+
+        Map<String, ExecutorInfo> instanceToExecutor = executors.stream()
+                .collect(Collectors.toMap(ExecutorInfo::getInstanceId, Function.identity()));
         Set<String> visitedExecutorIds = new HashSet<>();
 
         for (String instanceId : instanceIds) {
-            ExecutorInfo executor = findExecutorByInstanceId(instanceId);
+            ExecutorInfo executor = instanceToExecutor.get(instanceId);
             if (executor == null) {
                 log.warn("[手动检测] 未找到实例 {} 对应的执行器", instanceId);
                 continue;
@@ -486,8 +513,12 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
      */
     private List<MetricReportItemDTO> collectFromAllExecutors() {
         List<MetricReportItemDTO> collected = new ArrayList<>();
-        List<ExecutorInfo> executors = executorInfoMapper.selectActiveOnlineExecutors("1", "1");
-        if (executors == null || executors.isEmpty()) {
+        List<ExecutorInfo> executors = executorInfoMapper.selectList(new LambdaQueryWrapper<ExecutorInfo>()
+                .eq(ExecutorInfo::getManagementStatus, CommonConstant.MANAGE_ACTIVE)
+                .eq(ExecutorInfo::getExecutorStatus,CommonConstant.ONLINE)
+        );
+
+        if (executors.isEmpty()) {
             return collected;
         }
         for (ExecutorInfo executor : executors) {
@@ -508,7 +539,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
                     agentHttpClient.triggerCollect(executor.getHostIp(), executor.getExecutorPort());
             if (resp == null || resp.getCode() != 0 || resp.getData() == null) {
                 log.warn("[手动检测] 执行器 {} 采集失败: {}",
-                        executor.getExecutorId(),
+                        executor.getId(),
                         resp == null ? "null" : resp.getMessage());
                 return list;
             }
@@ -516,7 +547,7 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
                 list.add(item);
                 // 手动采集记录入表
                 item.setToken(executor.getExecutorToken());
-                item.setCollectType("1");
+                item.setCollectType(CommonConstant.MANUAL);
                 try {
                     metricLogService.reportMetric(item);
                 } catch (Exception e) {
@@ -524,19 +555,11 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
                 }
             }
         } catch (Exception e) {
-            log.error("[手动检测] 调用执行器异常: {}", executor.getExecutorId(), e);
+            log.error("[手动检测] 调用执行器异常: {}", executor.getId(), e);
         }
         return list;
     }
 
-    /**
-     * 通过实例找到对应的执行器
-     * @param instanceId
-     * @return
-     */
-    private ExecutorInfo findExecutorByInstanceId(String instanceId) {
-        return executorInfoMapper.selectByInstanceId(instanceId);
-    }
 
     /**
      * 遍历规则 x 采集数据，命中阈值则生成告警记录
@@ -548,55 +571,118 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         if (collected == null || collected.isEmpty() || rules == null || rules.isEmpty()) {
             return false;
         }
-        boolean hasAlarm = false;
-        for (AlarmRule rule : rules) {
-            if (!"1".equals(rule.getEnableStatus())) {
-                continue;
+        //按实例索引采集数据
+        Map<String, MetricReportItemDTO> itemsByInstance = new HashMap<>();
+        for (MetricReportItemDTO item : collected) {
+            if (item.getInstanceId() != null) {
+                itemsByInstance.put(item.getInstanceId(), item);
             }
+        }
+        if (itemsByInstance.isEmpty()) {
+            return false;
+        }
+
+
+        //构建候选集，规则 × 作用域命中的实例，一条规则对应多个数据记录，同时求最大持续周期
+        List<AlarmCandidate> candidates = new ArrayList<>();
+        int duration=1;
+        for (AlarmRule rule : rules) {
             if (rule.getThreshold() == null || rule.getCompareType() == null) {
                 continue;
             }
-            for (MetricReportItemDTO item : collected) {
-                if (!ruleMatchHelper.isRuleApplyToInstance(rule, item.getInstanceId())) {
-                    continue;
-                }
-
-                //告警持续时长判断，默认 1个周期，触发就告警
-                if (!isContinuousTriggered(rule, item.getInstanceId())) {
-                    continue;
-                }
-
-                //静默期重复告警抑制
-                if (isAlarmSilenced(rule, item.getInstanceId())) {
-                    continue;
-                }
-
-                double value;
-                try {
-                    String valueStr = getMetricValue(item, rule.getMetricKey());
-                    value = Double.parseDouble(valueStr.trim());
-                } catch (Exception e) {
-                    continue;
-                }
-                generateAlarmRecord(rule, item, value);
-                hasAlarm = true;
+            List<String> scope = resolveScope(rule);   // null = 全部实例；空集 = 配置无效
+            if (scope != null && scope.isEmpty()) {
+                continue;
             }
+            duration = Math.max(ParseUtils.parseDuration(rule.getDuration()), 1);
+
+            if (scope == null) {
+                // 全部实例：与所有采集快照组合
+                for (MetricReportItemDTO item : itemsByInstance.values()) {
+                    candidates.add(new AlarmCandidate(rule, item));
+                }
+            } else {
+                // 指定实例：只遍历 scope
+                for (String instanceId : scope) {
+                    MetricReportItemDTO item = itemsByInstance.get(instanceId);
+                    if (item != null) {
+                        candidates.add(new AlarmCandidate(rule, item));
+                    }
+                }
+            }
+        }
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
+        // 历史值按 (metricKey,instanceId)、静默按 (ruleId, instanceId) 去重
+        Map<String, List<String>> historyMap = new HashMap<>();
+        Map<String, Boolean> silencedMap = new HashMap<>();
+        for (AlarmCandidate c : candidates) {
+            String hKey = historyKey(c);
+            if (!historyMap.containsKey(hKey)) {
+                historyMap.put(hKey, metricLogMapper.selectRecentMetricValues(
+                        c.item.getInstanceId(), c.rule.getMetricKey(), duration));
+            }
+            String sKey = silenceKey(c);
+            if (!silencedMap.containsKey(sKey)) {
+                /*判断该规则的该节点是否处于静默期*/
+                silencedMap.put(sKey, isAlarmSilenced(c.rule, c.item.getInstanceId()));
+            }
+        }
+
+        //静默抑制判断、连续周期判断，生成告警
+        boolean hasAlarm = false;
+        for (AlarmCandidate c : candidates) {
+            /*处于静默，跳*/
+            if (Boolean.TRUE.equals(silencedMap.get(silenceKey(c)))) {
+                continue;
+            }
+            /*处于连续采集周期，跳*/
+            if (!isContinuousTriggered(c.rule, historyMap.get(historyKey(c)))) {
+                continue;
+            }
+            double value;
+            try {
+                value = Double.parseDouble(getMetricValue(c.item, c.rule.getMetricKey()).trim());
+            } catch (Exception e) {
+                continue;
+            }
+            generateAlarmRecord(c.rule, c.item, value);
+            hasAlarm = true;
         }
         return hasAlarm;
     }
+    /**
+     * 取规则生效节点 scopeInstanceIds
+     * @return null = 全部实例；空集 = 指定实例但配置无效；否则为实例集合。
+     */
+    private List<String> resolveScope(AlarmRule rule) {
+        if (CommonConstant.ALL_INSTANCE_IDS.equals(rule.getScopeType())) {
+            return null;
+        }
+        String ids = rule.getScopeInstanceId();
+        if (ids.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> scope = new ArrayList<>();
+        for (String id : ids.split(",")) {
+            String trimmed = id.trim();
+            if (!trimmed.isEmpty()) {
+                scope.add(trimmed);
+            }
+        }
+        return scope;
+    }
 
     /**
-     * 持续触发判断，duration单位“采集周期个数”，默认1，看最新1条
-     * 取该实例该指标最近 duration 条采集值，比较条件
-     * @param rule
-     * @param instanceId
-     * @return
+     * 判断最近 duration 个周期的值是否连续满足比较条件。
+     * values 为预取的历史值（约定最近优先，mapper 按时间倒序返回），本方法纯内存遍历。
      */
-
-    private boolean isContinuousTriggered(AlarmRule rule, String instanceId) {
-        int duration = ParseUtils.parseDuration(rule.getDuration());
-        if (duration <= 0) {
-            duration = 1;
+    private boolean isContinuousTriggered(AlarmRule rule, List<String> values) {
+        int duration = Math.max(ParseUtils.parseDuration(rule.getDuration()), 1);
+        if (values == null || values.size() < duration) {
+            return false;
         }
         double threshold;
         try {
@@ -604,20 +690,13 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         } catch (Exception e) {
             return false;
         }
-
-        List<String> values = metricLogMapper.selectRecentMetricValues(
-                instanceId, rule.getMetricKey(), duration);
-        if (values == null || values.size() < duration) {
-            // 历史数据不足，暂不告警
-            return false;
-        }
-        for (String v : values) {
+        for (int i = 0; i < duration; i++) {
+            String v = values.get(i);
             if (v == null || v.trim().isEmpty()) {
                 return false;
             }
             try {
-                double val = Double.parseDouble(v.trim());
-                if (!CompareUtil.compareValue(val, rule.getCompareType(), threshold)) {
+                if (!CompareUtil.compareValue(Double.parseDouble(v.trim()), rule.getCompareType(), threshold)) {
                     return false;
                 }
             } catch (Exception e) {
@@ -625,6 +704,25 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
             }
         }
         return true;
+    }
+
+    private static String historyKey(AlarmCandidate c) {
+        return c.rule.getMetricKey() + "|" + c.item.getInstanceId();
+    }
+
+    private static String silenceKey(AlarmCandidate c) {
+        return c.rule.getId() + "|" + c.item.getInstanceId();
+    }
+
+    /** 候选：规则 + 命中的采集快照 */
+    private static final class AlarmCandidate {
+        private final AlarmRule rule;
+        private final MetricReportItemDTO item;
+
+        AlarmCandidate(AlarmRule rule, MetricReportItemDTO item) {
+            this.rule = rule;
+            this.item = item;
+        }
     }
 
     /**
@@ -648,13 +746,21 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
             return false;
         }
         LocalDateTime since = LocalDateTime.now().minusSeconds(seconds);
-        long count = alarmRecordMapper.countRecentByRuleAndInstance(
-                rule.getRuleId(), instanceId, since);
+
+        long count = alarmRecordMapper.selectCount(
+                new LambdaQueryWrapper<AlarmRecord>()
+                        .eq(AlarmRecord::getRuleId, rule.getRuleId())
+                        .eq(AlarmRecord::getInstanceId, instanceId)
+                        .ge(AlarmRecord::getTriggerTime, since));
+
+
+
         return count > 0;
     }
 
 
 
+    //Todo
     /**
      * 从上报项中取指标值。
      */
@@ -693,17 +799,16 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
     private void generateAlarmRecord(AlarmRule rule, MetricReportItemDTO item, double value) {
         try {
             AlarmRecord record = new AlarmRecord();
-            record.setAlarmNo("AL" + System.currentTimeMillis()
-                    + String.format("%03d", (int) (Math.random() * 1000)));
+            record.setAlarmNo("AL_" + IdUtil.getSnowflakeNextIdStr());
             record.setRuleId(rule.getRuleId());
             record.setInstanceId(item.getInstanceId());
             record.setMetricKey(rule.getMetricKey());
             record.setMetricName(rule.getMetricName());
             record.setAlarmLevel(rule.getAlarmLevel());
             record.setAlarmContent(String.format("指标【%s】当前值 %s%s 超过阈值 %s%s",
-                    rule.getMetricName() == null ? rule.getMetricKey() : rule.getMetricName(),
-                    value, rule.getUnit() == null ? "" : rule.getUnit(),
-                    rule.getThreshold(), rule.getUnit() == null ? "" : rule.getUnit()));
+                    rule.getMetricName(),
+                    value, rule.getUnit(),
+                    rule.getThreshold(), rule.getUnit()));
             record.setTriggerValue(String.valueOf(value));
             record.setThreshold(rule.getThreshold());
             record.setUnit(rule.getUnit());
@@ -720,31 +825,30 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
     }
 
     // ========================================================================
-    // [新增] 告警自动恢复：指标连续 N 个采集周期回落阈值以下自动恢复
+    // 告警自动恢复：指标连续 N 个采集周期回落阈值以下自动恢复
     // ========================================================================
 
     /**
      * 自动恢复检查：
-     * 1) 开关关闭（periods<=0）直接返回；
+     * 1) 开关关闭（periods<=0）直接返回，rules非null 非空
      * 2) 收集本次检测涉及的 ruleId，一次性查询这些规则下的未恢复告警（自定义 Mapper）；
      * 3) 逐条判断最近 N 条采集值是否全部不满足告警条件，满足则自动恢复。
      *
      * @param rules 本次检测涉及的规则列表（单规则=单条，全量=全部启用规则）
      */
     private void checkAndAutoRecover(List<AlarmRule> rules) {
-        // [新增] 自动恢复开关：periods<=0 视为关闭
+        //rules非空非null非禁用
+        //自动恢复开关：periods<=0 视为关闭
         if (autoRecoverPeriods <= 0) {
             return;
         }
-        if (rules == null || rules.isEmpty()) {
-            return;
-        }
 
-        // [新增] 构建 ruleId -> rule 映射（for 循环，不用 Stream）
+
+        //构建 ruleId
         Map<String, AlarmRule> ruleMap = new HashMap<>();
         List<String> ruleIds = new ArrayList<>(rules.size());
         for (AlarmRule rule : rules) {
-            if (rule == null || rule.getRuleId() == null) {
+            if (rule.getRuleId() == null) {
                 continue;
             }
             if (ruleMap.put(rule.getRuleId(), rule) == null) {
@@ -755,20 +859,25 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
             return;
         }
 
-        // [新增] 自定义 Mapper 一次性查询这些规则下的未恢复告警，避免 N 次单规则查询
-        List<AlarmRecord> unrecovered = alarmRecordMapper.selectUnrecoveredByRuleIds(ruleIds);
-        if (unrecovered == null || unrecovered.isEmpty()) {
+        // 查这些规则下的未恢复告警
+        List<AlarmRecord> unrecovered = alarmRecordMapper.selectList(new LambdaQueryWrapper<AlarmRecord>()
+                .eq(AlarmRecord::getRecoverStatus,CommonConstant.STATUS_UNRECOVER)
+                .in(AlarmRecord::getRuleId, ruleIds)
+                .orderByAsc(AlarmRecord::getTriggerTime)
+        );
+
+        if (unrecovered.isEmpty()) {
             return;
         }
 
-        // [新增] 逐条判断是否满足自动恢复条件
+        //逐条判断是否满足自动恢复条件
         for (AlarmRecord record : unrecovered) {
-            if (record == null || record.getRuleId() == null) {
+            if (record.getRuleId() == null) {
                 continue;
             }
             AlarmRule rule = ruleMap.get(record.getRuleId());
             if (rule == null) {
-                // 规则不在本次检测范围（已禁用/已删除），跳过，保留人工恢复入口
+                // 规则不在本次检测范围（已禁用/已删除），跳过
                 continue;
             }
             try {
@@ -783,9 +892,8 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
 
     /**
      * 判断告警是否满足自动恢复条件：
-     * 取该实例该指标最近 autoRecoverPeriods 条采集值（倒序），
-     * 全部不满足告警条件则视为已恢复。
-     * 以下情况保守返回 false（不恢复）：
+     * 取该实例该指标最近 autoRecoverPeriods 条采集值，全部不满足告警条件则已恢复
+     * 以下情况保守返回 false：
      * - 规则阈值/比较方式缺失或解析失败；
      * - 采集值不足 N 条；
      * - 任意一条为 null / 空串 / 解析失败；
@@ -801,13 +909,12 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
         } catch (Exception e) {
             return false;
         }
-        // [新增] 复用 MetricLogMapper 自定义方法取最近 N 条采集值（倒序）
-        List<String> values = metricLogMapper.selectRecentMetricValues(
-                record.getInstanceId(), rule.getMetricKey(), autoRecoverPeriods);
+        //取最近 N 条采集值
+        List<String> values = metricLogMapper.selectRecentMetricValues(record.getInstanceId(), rule.getMetricKey(), autoRecoverPeriods);
         if (values == null || values.size() < autoRecoverPeriods) {
             return false;
         }
-        // [新增] for 循环判断，任意一条仍满足告警条件则未恢复
+        //任意一条仍满足告警条件则未恢复
         for (String v : values) {
             if (v == null || v.trim().isEmpty()) {
                 return false;
@@ -825,23 +932,23 @@ public class AlarmRuleServiceImpl extends ServiceImpl<AlarmRuleMapper, AlarmRule
     }
 
     /**
-     * 执行自动恢复：
+     * 执行自动恢复
      * 更新 recover_status=1、recover_time=当前时间、updated_time=当前时间；
-     * 记入操作审计日志（operationType=自动恢复，与人工恢复区分）。
-     * 使用 BaseMapper.updateById（非 LambdaWrapper），传入部分字段，
-     * MyBatis-Plus 默认 NOT_NULL 更新策略只更新非 null 字段。
+     * 记入操作审计日志（operationType=自动恢复，与人工恢复区分）
      */
     private void autoRecover(AlarmRecord record) {
         LocalDateTime now = LocalDateTime.now();
-        AlarmRecord update = new AlarmRecord();
-        update.setId(record.getId());
-        update.setRecoverStatus(StatusEnum.RECOVER.getCode());
-        update.setRecoverTime(now);
-        update.setUpdatedTime(now);
-        int rows = alarmRecordMapper.updateById(update);
+        int rows = alarmRecordMapper.update(null,
+                new LambdaUpdateWrapper<AlarmRecord>()
+                        .set(AlarmRecord::getRecoverStatus, CommonConstant.STATUS_RECOVER)
+                        .set(AlarmRecord::getRecoverTime,now)
+                        .set(AlarmRecord::getUpdatedTime,now)
+                        .eq(AlarmRecord::getId, record.getId())
+        );
+
         if (rows > 0) {
-            // [新增] 自动恢复记入操作审计日志
-            auditLogService.record("告警记录", "自动恢复", record.getId(),
+            //自动恢复记入操作审计日志
+            auditLogService.record(CommonConstant.MODULE_ALARM_RECORD, CommonConstant.OPERATION_TYPE_ALARM_RECOVERY, record.getId(),
                     "指标连续" + autoRecoverPeriods + "周期回落阈值以下，自动恢复告警："
                             + record.getAlarmNo());
             log.info("[自动恢复] 告警已自动恢复, alarmNo={}, periods={}",

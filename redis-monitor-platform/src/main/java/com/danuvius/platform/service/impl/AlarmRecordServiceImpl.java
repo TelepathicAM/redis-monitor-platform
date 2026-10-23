@@ -1,16 +1,20 @@
 package com.danuvius.platform.service.impl;
 
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.danuvius.platform.common.constant.CommonConstant;
 import com.danuvius.platform.common.exception.BusinessCode;
 import com.danuvius.platform.common.exception.BusinessException;
-import com.danuvius.platform.mapper.AlarmRecordMapper;
-import com.danuvius.platform.mapper.AlarmRuleMapper;
-import com.danuvius.platform.mapper.MetricLogMapper;
-import com.danuvius.platform.mapper.RedisInstanceMapper;
+import com.danuvius.platform.mapper.*;
 import com.danuvius.platform.model.dto.alarm.record.*;
 import com.danuvius.platform.model.entity.AlarmRecord;
+import com.danuvius.platform.model.entity.AlarmRule;
 import com.danuvius.platform.model.entity.AuditLog;
+import com.danuvius.platform.model.entity.RedisInstance;
+import com.danuvius.platform.model.enums.metric.MetricTypeEnum;
 import com.danuvius.platform.model.enums.StatusEnum;
 import com.danuvius.platform.service.AlarmNoticeService;
 import com.danuvius.platform.service.AlarmRecordService;
@@ -23,6 +27,7 @@ import org.springframework.util.CollectionUtils;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -30,8 +35,8 @@ import java.util.Map;
 @Service
 public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, AlarmRecord>
         implements AlarmRecordService {
-    private final AlarmRecordMapper recordMapper;
-    private final AlarmRuleMapper ruleMapper;
+    private final AlarmRecordMapper alarmRecordMapper;
+    private final AlarmRuleMapper alarmRuleMapper;
     private final MetricLogMapper metricLogMapper;
     private final AuditLogService auditLogService;
 
@@ -39,22 +44,24 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
     private final RedisInstanceMapper redisInstanceMapper;
     private final AlarmNoticeService alarmNoticeService;
     private  final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private final AuditLogMapper auditLogMapper;
 
 
-    public AlarmRecordServiceImpl(AlarmRuleMapper ruleMapper, AlarmRecordMapper recordMapper,
+    public AlarmRecordServiceImpl(AlarmRuleMapper alarmRuleMapper, AlarmRecordMapper alarmRecordMapper,
                                   MetricLogMapper metricLogMapper, RedisInstanceMapper redisInstanceMapper,
-                                  AuditLogService auditLogService, AlarmNoticeService alarmNoticeService
-                                  ) {
-        this.recordMapper = recordMapper;
-        this.ruleMapper = ruleMapper;
+                                  AuditLogService auditLogService, AlarmNoticeService alarmNoticeService,
+                                  AuditLogMapper auditLogMapper) {
+        this.alarmRecordMapper = alarmRecordMapper;
+        this.alarmRuleMapper = alarmRuleMapper;
         this.metricLogMapper = metricLogMapper;
         this.redisInstanceMapper = redisInstanceMapper;
         this.auditLogService = auditLogService;
         this.alarmNoticeService = alarmNoticeService;
+        this.auditLogMapper = auditLogMapper;
     }
     @Override
     public List<RecordItemResponse> getRecentUnrecovered() {
-        List<RecordItemResponse> list = recordMapper.selectRecentUnrecovered(5);
+        List<RecordItemResponse> list = alarmRecordMapper.selectRecentUnrecovered(CommonConstant.DEFAULT_RECENT);
 
         return CollectionUtils.isEmpty(list) ? new ArrayList<>() : list;
     }
@@ -62,19 +69,18 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
 
     @Override
     public List<RecordItemResponse> getRecent() {
-        List<RecordItemResponse> list = recordMapper.selectRecent(5);
-
-        return CollectionUtils.isEmpty(list) ? new ArrayList<>() : list;
+        List<RecordItemResponse> list = alarmRecordMapper.selectRecent(CommonConstant.DEFAULT_RECENT);
+        return CollectionUtils.isEmpty(list) ? Collections.emptyList() : list;
 
     }
 
     @Override
-    public RecordOverviewResponse getRecordOverview(String startTime, String endTime) {
+    public RecordOverviewResponse getRecordOverview() {
         LocalDateTime end = LocalDateTime.now();
         LocalDateTime start = end.minusDays(3);
-        if (startTime == null || startTime.trim().isEmpty()) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
-        if (endTime == null || endTime.trim().isEmpty()) endTime = end.format(FORMATTER);
-        return recordMapper.selectRecordOverview(startTime, endTime);
+        String startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
+        String endTime = end.format(FORMATTER);
+        return alarmRecordMapper.selectRecordOverview(startTime, endTime);
     }
 
     /**
@@ -86,7 +92,6 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
     public RecordPageResponse getRecordPage(RecordPageRequest req) {
         int pageNum = req.getPageNum() == null || req.getPageNum() < 1 ? 1 : req.getPageNum();
         int pageSize = req.getPageSize() == null || req.getPageSize() < 1 ? 12 : req.getPageSize();
-        int offset = (pageNum - 1) * pageSize;
 
         String instanceId=req.getInstanceId();
         String alarmLevel=req.getAlarmLevel();
@@ -96,24 +101,12 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
         String startTime=req.getStartTime();
         String endTime=req.getEndTime();
 
-        LocalDateTime end = LocalDateTime.now();
-        LocalDateTime start = end.minusDays(3);
-        if (startTime == null || startTime.trim().isEmpty()) startTime = start.toLocalDate().atStartOfDay().format(FORMATTER);
-        if (endTime == null || endTime.trim().isEmpty()) endTime = end.format(FORMATTER);
-
         //查
-        List<RecordItemResponse> list = recordMapper.selectRecordPage(
-                instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime,offset,pageSize);
-        long total = recordMapper.countRecordPage(
-                instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime);
-
+        Page<RecordItemResponse> page = new Page<>(pageNum, pageSize);
+        alarmRecordMapper.selectRecordPage(page,instanceId, alarmLevel, metricKey, recoverStatus, keyword, startTime, endTime);
 
         RecordPageResponse resp = new RecordPageResponse();
-        resp.setTotal(total);
-        resp.setPageNum(pageNum);
-        resp.setPageSize(pageSize);
-        resp.setTotalPages((int) Math.ceil((double) total / pageSize));
-        resp.setList(list);
+        resp.setPage(page);
         return resp;
     }
 
@@ -124,17 +117,22 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
      */
     @Override
     public RecordDetailResponse getRecordDetail(String alarmRecordId) {
-        AlarmRecord record = recordMapper.selectById(alarmRecordId);
+        AlarmRecord record = alarmRecordMapper.selectById(alarmRecordId);
         if (record == null) throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "告警记录不存在");
 
         RecordDetailResponse dto = new RecordDetailResponse();
         dto.setAlarmBaseInfo(record);
         if (record.getRuleId() != null) {
-            dto.setRuleInfo(ruleMapper.selectByRuleId(record.getRuleId()));
+            AlarmRule rule = alarmRuleMapper.selectOne(Wrappers.<AlarmRule>lambdaQuery()
+                    .eq(AlarmRule::getRuleId, record.getRuleId()));
+            dto.setRuleInfo(rule);
         }
+
         /* 关联节点信息表查询实例名、ip、端口、角色 */
         if (record.getInstanceId() != null) {
-            dto.setInstanceInfo(redisInstanceMapper.selectByInstanceId(record.getInstanceId()));
+            RedisInstance redisInstance = redisInstanceMapper.selectOne(Wrappers.<RedisInstance>lambdaQuery()
+                    .eq(RedisInstance::getInstanceId, record.getInstanceId()));
+            dto.setInstanceInfo(redisInstance);
         }
         /* 查询通知发送记录表，返回邮件通知发送时间、接收人、发送状态 */
         dto.setNoticeLogs(alarmNoticeService.listByAlarmRecordId(record.getId()));
@@ -150,34 +148,36 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
      */
     @Override
     public RecordMetricTrendResponse getMetricTrend(String alarmRecordId) {
-        AlarmRecord record = recordMapper.selectById(alarmRecordId);
+        AlarmRecord record = alarmRecordMapper.selectById(alarmRecordId);
         if (record == null) throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "告警记录不存在");
+        if (record.getTriggerTime() == null) {
+            throw new BusinessException(BusinessCode.PARAMS_ERROR.getCode(),"告警记录缺少告警触发时间");
+        }
 
         RecordMetricTrendResponse dto = new RecordMetricTrendResponse();
         dto.setMetricName(record.getMetricName());
         dto.setThresholdValue(record.getThreshold());
+        dto.setUnit(record.getUnit());
         dto.setTriggerTime(record.getTriggerTime());
         dto.setRecoverTime(record.getRecoverTime());
+
         dto.setTimestampList(new ArrayList<>());
         dto.setValueList(new ArrayList<>());
 
-        if (record.getTriggerTime() == null) {
-            return dto;
-        }
+
 
         //曲线序列开始时间：触发时间-30min
         LocalDateTime start = record.getTriggerTime().minusMinutes(30);
         LocalDateTime end;
         //未恢复：当前时间，已恢复：恢复时间+10min
-        if ("1".equals(record.getRecoverStatus()) && record.getRecoverTime() != null) {
+        if (CommonConstant.STATUS_RECOVER.equals(record.getRecoverStatus()) && record.getRecoverTime() != null) {
             end = record.getRecoverTime().plusMinutes(10);
         } else {
             end = LocalDateTime.now();
         }
 
         //拉时间序列
-        List<Map<String, Object>> rows = metricLogMapper.selectMetricTrend(
-                record.getInstanceId(), record.getMetricKey(), start, end);
+        List<Map<String, Object>> rows = metricLogMapper.selectMetricTrend(record.getInstanceId(), record.getMetricKey(), start, end);
 
         List<String> timestampList = new ArrayList<>();
         List<Double> valueList = new ArrayList<>();
@@ -204,12 +204,13 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
      */
     private void fillOperatorInfo(RecordDetailResponse dto, String alarmRecordId) {
         try {
-            AuditLog latest = auditLogService.lambdaQuery()
+            AuditLog latest = auditLogMapper.selectOne(Wrappers.<AuditLog>lambdaQuery()
                     .eq(AuditLog::getTargetId, alarmRecordId)
-                    .eq(AuditLog::getOperationType, "恢复")
+                    .eq(AuditLog::getOperationType,CommonConstant.OPERATION_TYPE_ALARM_RECOVERY)
                     .orderByDesc(AuditLog::getOperationTime)
                     .last("LIMIT 1")
-                    .one();
+            );
+
             if (latest != null) {
                 dto.setOperatorId(latest.getOperatorId());
                 dto.setOperatorName(latest.getOperatorName());
@@ -233,22 +234,29 @@ public class AlarmRecordServiceImpl extends ServiceImpl<AlarmRecordMapper, Alarm
      */
     @Override
     public boolean recoverAlarm(String alarmRecordId) {
-        AlarmRecord record = recordMapper.selectById(alarmRecordId);
+        AlarmRecord record = alarmRecordMapper.selectById(alarmRecordId);
         if (record == null) {
             throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "告警记录不存在");
         }
         //已恢复幂等返回，不重复写审计日志
-        if (StatusEnum.RECOVER.getCode().equals(record.getRecoverStatus())) {
+        if (CommonConstant.STATUS_RECOVER.equals(record.getRecoverStatus())) {
             return true;
         }
+
+
         LocalDateTime now = LocalDateTime.now();
-        record.setRecoverStatus(StatusEnum.RECOVER.getCode());
-        record.setRecoverTime(now);
-        record.setUpdatedTime(now);
-        int rows = recordMapper.updateById(record);
+        int rows = alarmRecordMapper.update(null,
+                new LambdaUpdateWrapper<AlarmRecord>()
+                        .set(AlarmRecord::getRecoverStatus, CommonConstant.STATUS_RECOVER)
+                        .set(AlarmRecord::getRecoverTime,now)
+                        .set(AlarmRecord::getUpdatedTime,now)
+                        .eq(AlarmRecord::getId, record.getId())
+        );
+
+
         if (rows > 0) {
             //人工确认恢复记入操作审计日志
-            auditLogService.record("告警记录", "恢复", alarmRecordId,
+            auditLogService.record(CommonConstant.MODULE_ALARM_RECORD, CommonConstant.OPERATION_TYPE_ALARM_RECOVERY, alarmRecordId,
                     "人工确认恢复告警：" + record.getAlarmNo());
         }
         return rows > 0;

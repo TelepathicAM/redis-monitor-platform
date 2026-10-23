@@ -5,6 +5,7 @@ import com.danuvius.platform.model.dto.monitor.*;
 import com.danuvius.platform.model.entity.RedisInstance;
 
 import java.io.File;
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface RedisInstanceService extends IService<RedisInstance> {
@@ -74,4 +75,16 @@ public interface RedisInstanceService extends IService<RedisInstance> {
      * 获取导出文件，任务成功后下载
      */
     File getExportFile(String taskId);
+
+    /**
+     * 更新实例表，心跳、运行状态
+     * @param instanceId
+     * @param now
+     * @param runStatus
+     * @return
+     */
+    Boolean updateHeartbeatAndStatus(String instanceId, LocalDateTime now, String runStatus);
+
+
+    RedisInstance getRedisInstance(String instanceId);
 }

@@ -12,7 +12,7 @@ import java.util.Date;
 @TableName("rms_metric_log")
 public class MetricLog {
 
-    /*主键id*/
+    /*采集记录id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
     /*实例id*/

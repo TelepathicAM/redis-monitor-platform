@@ -13,20 +13,20 @@ import java.time.LocalDateTime;
 @Data
 public class ReportOverviewDTO implements Serializable {
 
-    private Double cpuAvg;
-    private Double cpuMax;
+    private String cpuAvg;
+    private String cpuMax;
     private LocalDateTime cpuMaxTim;
 
-    private Double redisMemAvg;
-    private Double redisMemMax;
+    private String redisMemAvg;
+    private String redisMemMax;
     private LocalDateTime redisMemMaxTim;
 
-    private Double qpsAvg;
-    private Double qpsMax;
+    private String qpsAvg;
+    private String qpsMax;
     private LocalDateTime qpsMaxTim;
 
-    private Double latencyAvg;
-    private Double latencyMax;
+    private String latencyAvg;
+    private String latencyMax;
     private LocalDateTime latencyMaxTim;
 
     /** 告警总次数 */

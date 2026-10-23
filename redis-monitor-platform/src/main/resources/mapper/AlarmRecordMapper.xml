@@ -2,6 +2,7 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.danuvius.platform.mapper.AlarmRecordMapper">
     <resultMap id="ItemDTOResultMap" type="com.danuvius.platform.model.dto.alarm.record.RecordItemResponse">
+        <id property="alarmRecordId" column="id" jdbcType="VARCHAR"/>
         <result property="alarmNo" column="alarm_no" jdbcType="VARCHAR"/>
         <result property="ruleId" column="rule_id" jdbcType="VARCHAR"/>
         <result property="instanceId" column="instance_id" jdbcType="VARCHAR"/>
@@ -22,7 +23,8 @@
 
 
     <select id="selectRecentUnrecovered" resultMap="ItemDTOResultMap">
-        SELECT r.alarm_no,
+        SELECT r.id,
+               r.alarm_no,
                r.rule_id,
                r.instance_id,
                i.instance_name,
@@ -45,7 +47,8 @@
     </select>
 
     <select id="selectRecent" resultMap="ItemDTOResultMap">
-        SELECT r.alarm_no,
+        SELECT r.id,
+               r.alarm_no,
                r.rule_id,
                r.instance_id,
                i.instance_name,
@@ -79,7 +82,8 @@
     </select>
 
     <select id="selectRecordPage" resultMap="ItemDTOResultMap">
-        SELECT r.alarm_no,
+        SELECT r.id,
+        r.alarm_no,
         r.rule_id,
         r.instance_id,
         i.instance_name,
@@ -107,20 +111,6 @@
         </if>
         AND r.trigger_time BETWEEN #{startTime} AND #{endTime}
         ORDER BY r.trigger_time DESC
-        LIMIT #{limit} OFFSET #{offset}
-    </select>
-
-    <select id="countRecordPage" resultType="long">
-        SELECT COUNT(*) FROM alarm_record r
-        WHERE 1=1
-        <if test="instanceId != null and instanceId != ''">AND r.instance_id = #{instanceId}</if>
-        <if test="alarmLevel != null and alarmLevel != ''">AND r.alarm_level = #{alarmLevel}</if>
-        <if test="metricKey != null and metricKey != ''">AND r.metric_key = #{metricKey}</if>
-        <if test="recoverStatus != null and recoverStatus != ''">AND r.recover_status = #{recoverStatus}</if>
-        <if test="keyword != null and keyword != ''">
-            AND (r.alarm_no LIKE CONCAT('%',#{keyword},'%') OR r.alarm_content LIKE CONCAT('%',#{keyword},'%'))
-        </if>
-        AND r.trigger_time BETWEEN #{startTime} AND #{endTime}
     </select>
 
     <!-- 同规则同实例重复告警抑制：统计 since 之后的告警数量 -->

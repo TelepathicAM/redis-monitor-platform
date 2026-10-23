@@ -55,18 +55,6 @@ public final class NumberValidator {
         }
     }
 
-    /** 范围 [min, max]（闭区间） */
-    public static void between(Number value, Number min, Number max, String fieldName) {
-        if (value == null) {
-            return;
-        }
-        double v = value.doubleValue();
-        if (v < min.doubleValue() || v > max.doubleValue()) {
-            throw new ParameterException(ParameterCode.PARAM_RANGE_ERROR,
-                    "字段[" + fieldName + "]必须在" + min + "~" + max + "之间");
-        }
-    }
-
     /** 最小精度（小数位） */
     public static void scaleBetween(Number value, int minScale, int maxScale, String fieldName) {
         if (value == null) {
@@ -107,16 +95,76 @@ public final class NumberValidator {
         }
     }
 
-    /** 解析为 Double（空白返回 null） */
+
+    /** 解析为 Double（空白返回 null；拒绝 NaN/Infinity） */
     public static Double parseDouble(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
             return null;
         }
         try {
-            return Double.valueOf(value.trim());
+            Double d = Double.valueOf(value.trim());
+            // 关键修复：NaN / Infinity 不是合法业务数值
+            if (d.isNaN() || d.isInfinite()) {
+                throw new ParameterException(ParameterCode.PARAM_FORMAT_ERROR,
+                        "字段[" + fieldName + "]必须为有限数字");
+            }
+            return d;
         } catch (NumberFormatException e) {
             throw new ParameterException(ParameterCode.PARAM_TYPE_ERROR,
                     "字段[" + fieldName + "]必须为数字");
         }
+    }
+
+    /** 范围 [min, max]（闭区间），对 NaN/Infinity 也做防御 */
+    public static void valueBetween(Number value, Number min, Number max, String fieldName) {
+        if (value == null) {
+            return;
+        }
+        double v = value.doubleValue();
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            throw new ParameterException(ParameterCode.PARAM_FORMAT_ERROR,
+                    "字段[" + fieldName + "]必须为有限数字");
+        }
+        if (v < min.doubleValue() || v > max.doubleValue()) {
+            throw new ParameterException(ParameterCode.PARAM_RANGE_ERROR,
+                    "字段[" + fieldName + "]必须在" + min + "~" + max + "之间");
+        }
+    }
+
+// ===== 以下为新增组合方法 =====
+
+    /** 解析为 Double 并校验非负；空白返回 null */
+    public static Double parseDoubleNonNegative(String value, String fieldName) {
+        Double d = parseDouble(value, fieldName);
+        nonNegative(d, fieldName);
+        return d;
+    }
+
+    /** 解析为 Double 并校验闭区间 [min, max]；空白返回 null */
+    public static Double parseDoubleBetween(String value, double min, double max, String fieldName) {
+        Double d = parseDouble(value, fieldName);
+        valueBetween(d, min, max, fieldName);
+        return d;
+    }
+
+    /** 解析为 Integer 并校验闭区间 [min, max]；空白返回 null */
+    public static Integer parseIntegerBetween(String value, int min, int max, String fieldName) {
+        Integer i = parseInteger(value, fieldName);
+        valueBetween(i, min, max, fieldName);
+        return i;
+    }
+
+
+    public static void requiredDoubleBetween(String raw, double min, double max, String field) {
+        StringValidator.notBlank(raw,field);
+        Double v = NumberValidator.parseDoubleBetween(raw, min, max, field);
+        NumberValidator.notNull(v, field);
+    }
+
+    public static void requiredIntegerBetween(String raw, int min, int max, String field) {
+        StringValidator.notBlank(raw,field);
+
+        Integer v = NumberValidator.parseIntegerBetween(raw, min, max, field);
+        NumberValidator.notNull(v, field);
     }
 }

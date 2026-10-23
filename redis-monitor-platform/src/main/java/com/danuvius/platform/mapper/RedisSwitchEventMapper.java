@@ -9,14 +9,12 @@ import java.util.Map;
 
 public interface RedisSwitchEventMapper extends BaseMapper<RedisSwitchEvent> {
 
-    RedisSwitchEvent selectLatestSwitchEvent();
-
     /* 日周报主从切换明细（关联实例表补充切换双方 IP:Port） */
     List<Map<String, Object>> selectSwitchEventList(@Param("startTime") String startTime,
                                                     @Param("endTime") String endTime,
                                                     @Param("limit") int limit);
 
     /* 日周报主从切换统计：总次数与最近切换时间 */
-    Map<String, Object> selectSwitchStats(@Param("startTime") String startTime,
+    List<Map<String, Object>> selectSwitchStats(@Param("startTime") String startTime,
                                           @Param("endTime") String endTime);
 }

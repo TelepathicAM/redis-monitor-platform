@@ -12,6 +12,4 @@ public class AgentHeartbeatRequest {
     private String hostIp;
     /*执行器服务端口*/
     private String executorPort;
-    /*执行器状态：0=OFFLINE/1=ONLINE*/
-    private String executorStatus;
 }

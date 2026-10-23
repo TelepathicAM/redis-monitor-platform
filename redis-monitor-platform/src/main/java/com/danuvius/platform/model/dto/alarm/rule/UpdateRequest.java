@@ -16,6 +16,8 @@ public class UpdateRequest implements Serializable {
     private String ruleName;
     /*监控指标 key*/
     private String metricKey;
+    /*指标名称*/
+    private String metricName;
     /*比较方式：>、<、=、>=、<=*/
     private String compareType;
     /*告警阈值*/
@@ -34,6 +36,6 @@ public class UpdateRequest implements Serializable {
     private String scopeType;
     /*生效实例 id 列表，scopeType=2 时有效*/
     private List<String> scopeInstanceIds;
-    /*启用状态：true 启用 / false 禁用*/
-    private Boolean enableStatus;
+    /*启用状态：1= 启用 / 0 禁用*/
+    private String enableStatus;
 }

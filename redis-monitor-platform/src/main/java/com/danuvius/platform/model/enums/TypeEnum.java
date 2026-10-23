@@ -4,13 +4,7 @@ import lombok.Getter;
 
 @Getter
 public enum TypeEnum {
-    /**
-     * redis_instance表
-     */
-    /*role*/
-    MASTER("0","master"),
-    REPLICA("1","replica"),
-    UNKNOWN("2","unknown"),
+
 
     /**
      * audit_Log表
@@ -35,32 +29,12 @@ public enum TypeEnum {
     REDIS_UPDATE("8","redis_update"),
     REDIS_DELETE("9","redis_delete"),
 
-    /**
-     * alarm_rule表
-     */
-    /*scopeType*/
-    ALL_INSTANCE_IDS("0","all_instance_ids"),
-    SPECIFIED_INSTNACE_ID("1","specified_instnace_id"),
-    /*delFlag*/
-    NOT_DELETED("1","not_deleted"),
-    DELETED("1","deleted"),
 
 
-    /**
-     * redis_switch_event表
-     */
-    /*switchType*/
-    INIT("0", "基线"),
-    AUTO("1", "自动切换"),
-    MANUAL("2", "手动切换"),
-    OTHER("3", "其他"),
 
-    /**
-     * rms_metric_log表
-      */
-    /*collectType*/
-    AUTO_COLLECT("0","auto_collect"),
-    MANUAL_COLLECT("1","manual_collect"),
+
+
+
 
     /*日周报报告，告警与主从切换统计前端表格类型项*/
     ALARM("alarm","告警"),

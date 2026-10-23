@@ -23,7 +23,7 @@ public class AuditLog {
     /*操作人姓名*/
     private String operatorName;
 
-    /*功能模块，如：告警规则、报告导出*/
+    /*功能模块，告警规则、报告、运维任务*/
     private String module;
 
     /*操作类型，如：新增、修改、删除、导出*/
@@ -43,4 +43,7 @@ public class AuditLog {
 
     /*创建时间*/
     private LocalDateTime createdTime;
+
+    /*更新时间*/
+    private LocalDateTime updatedTime;
 }

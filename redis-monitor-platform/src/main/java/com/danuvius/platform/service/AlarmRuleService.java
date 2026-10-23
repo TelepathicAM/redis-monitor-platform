@@ -39,7 +39,7 @@ public interface AlarmRuleService extends IService<AlarmRule> {
      * @param enableStatus
      * @return
      */
-    boolean toggleStatus(String ruleId, Boolean enableStatus);
+    boolean toggleStatus(String ruleId, String enableStatus);
 
     /**
      * 单规则状态查询

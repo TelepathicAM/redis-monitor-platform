@@ -18,7 +18,7 @@ public class MetricReportItemDTO implements Serializable {
     private String cpuPer;
     /** 服务器内存占用率（%） */
     private String memServerPer;
-    /** Redis 内存使用量（字节） */
+    /** Redis 内存使用量（GB） */
     private String memUs;
     /** 命令加权平均延迟（微秒） */
     private String latency;

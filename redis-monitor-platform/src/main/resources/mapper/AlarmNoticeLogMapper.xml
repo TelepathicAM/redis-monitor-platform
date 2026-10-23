@@ -14,16 +14,6 @@
         <result column="created_time"   property="createdTime"/>
     </resultMap>
 
-    <sql id="Base_Column_List">
-        id, alarm_record_id, alarm_no, notice_type, receiver,
-        send_time, send_status, fail_reason, created_time
-    </sql>
 
-    <select id="selectByAlarmRecordId" resultMap="BaseResultMap">
-        SELECT <include refid="Base_Column_List"/>
-        FROM alarm_notice_log
-        WHERE alarm_record_id = #{alarmRecordId}
-        ORDER BY send_time DESC
-    </select>
 
 </mapper>

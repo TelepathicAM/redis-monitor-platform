@@ -1,11 +1,12 @@
 package com.danuvius.platform.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.danuvius.platform.mapper.AlarmNoticeLogMapper;
 import com.danuvius.platform.model.entity.AlarmNoticeLog;
 import com.danuvius.platform.model.entity.AlarmRecord;
 import com.danuvius.platform.model.entity.AlarmRule;
-import com.danuvius.platform.model.enums.AlarmLevelEnum;
+import com.danuvius.platform.model.enums.rule.AlarmLevelEnum;
 import com.danuvius.platform.service.AlarmNoticeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,7 +19,6 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * 告警通知 Service 实现
@@ -100,9 +100,15 @@ public class AlarmNoticeServiceImpl extends ServiceImpl<AlarmNoticeLogMapper, Al
         }
     }
 
+    /** 查询某条告警的全部通知记录，按发送时间倒序 */
     @Override
     public List<AlarmNoticeLog> listByAlarmRecordId(String alarmRecordId) {
-        return noticeLogMapper.selectByAlarmRecordId(alarmRecordId);
+        List<AlarmNoticeLog> list=noticeLogMapper.selectList(
+          new LambdaQueryWrapper<AlarmNoticeLog>()
+                  .eq(AlarmNoticeLog::getAlarmRecordId, alarmRecordId)
+                  .orderByDesc(AlarmNoticeLog::getSendTime)
+        );
+        return list;
     }
 
     private String buildSubject(AlarmRecord record) {

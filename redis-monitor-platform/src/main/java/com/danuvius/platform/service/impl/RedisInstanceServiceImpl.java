@@ -1,6 +1,12 @@
 package com.danuvius.platform.service.impl;
 
+import cn.hutool.core.util.IdUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.danuvius.platform.common.constant.CommonConstant;
 import com.danuvius.platform.common.exception.BusinessCode;
 import com.danuvius.platform.common.exception.BusinessException;
 import com.danuvius.platform.mapper.*;
@@ -10,20 +16,20 @@ import com.danuvius.platform.model.entity.AlarmRule;
 import com.danuvius.platform.model.entity.MetricLog;
 import com.danuvius.platform.model.entity.RedisInstance;
 import com.danuvius.platform.model.entity.RedisSwitchEvent;
-import com.danuvius.platform.model.enums.AlarmLevelEnum;
-import com.danuvius.platform.model.enums.MetricTypeEnum;
+import com.danuvius.platform.model.enums.rule.AlarmLevelEnum;
+import com.danuvius.platform.model.enums.metric.MetricTypeEnum;
 import com.danuvius.platform.model.enums.StatusEnum;
 import com.danuvius.platform.model.enums.TypeEnum;
+import com.danuvius.platform.model.enums.instance.RunStatusEnum;
 import com.danuvius.platform.service.AsyncTaskRunner;
 import com.danuvius.platform.service.AuditLogService;
 import com.danuvius.platform.service.RedisInstanceService;
+import com.danuvius.platform.service.RedisSwitchEventService;
 import com.danuvius.platform.util.*;
 import com.github.benmanes.caffeine.cache.Cache;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.io.File;
 import java.math.BigDecimal;
@@ -39,12 +45,13 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         implements RedisInstanceService {
     /** 复制延迟指标 key，与前端/规则保持一致 */
     private static final String REPL_DELAY_METRIC_KEY = "replDelay";
+    private final RedisInstanceService redisInstanceService;
 
     /* 实例离线判定阈值：超过该时长无心跳视为离线，平台端+执行器架构下按心跳时长判定，默认600s，可配置） */
     @Value("${platform.instance.offline-threshold-seconds:600}")
     private long offlineThresholdSeconds;
 
-    private final RedisInstanceMapper instanceMapper;
+    private final RedisInstanceMapper redisInstanceMapper;
     private final RedisSwitchEventMapper switchEventMapper;
     private final AlarmRuleMapper alarmRuleMapper;
     private final AlarmRecordMapper alarmRecordMapper;
@@ -52,6 +59,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
     private final RuleMatchHelper  ruleMatchHelper;
     /* 报告导出记操作审计日志 */
     private final AuditLogService auditLogService;
+    private final RedisSwitchEventService redisSwitchEventService;
     /* 报告导出异步任务存储 */
     private final ReportExportTaskHolder taskHolder;
     /* 报告导出文件生成器（异步任务内使用） */
@@ -62,29 +70,32 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
 
     private final Cache<String, Object> caffeineCache;
 
-    public RedisInstanceServiceImpl(RedisInstanceMapper instanceMapper,
+    public RedisInstanceServiceImpl(RedisInstanceMapper redisInstanceMapper,
                                     RedisSwitchEventMapper switchEventMapper,
                                     AlarmRuleMapper alarmRuleMapper,
                                     AlarmRecordMapper alarmRecordMapper,
                                     MetricLogMapper metricLogMapper,
                                     RuleMatchHelper ruleMatchHelper,
                                     AuditLogService auditLogService,
+                                    RedisSwitchEventService redisSwitchEventService,
                                     ReportExportTaskHolder taskHolder,
                                     ReportFileGenerator reportFileGenerator,
                                     AsyncTaskRunner asyncTaskRunner,
-                                    Cache<String, Object> caffeineCache
-    ) {
-        this.instanceMapper = instanceMapper;
+                                    Cache<String, Object> caffeineCache,
+                                    RedisInstanceService redisInstanceService) {
+        this.redisInstanceMapper = redisInstanceMapper;
         this.switchEventMapper = switchEventMapper;
         this.alarmRuleMapper = alarmRuleMapper;
         this.alarmRecordMapper = alarmRecordMapper;
         this.metricLogMapper = metricLogMapper;
         this.ruleMatchHelper = ruleMatchHelper;
         this.auditLogService = auditLogService;
+        this.redisSwitchEventService = redisSwitchEventService;
         this.taskHolder = taskHolder;
         this.reportFileGenerator = reportFileGenerator;
         this.asyncTaskRunner = asyncTaskRunner;
         this.caffeineCache = caffeineCache;
+        this.redisInstanceService = redisInstanceService;
     }
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -100,19 +111,52 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return (List<RedisInstanceItemDTO>) cached;
         }
 
-        List<RedisInstanceItemDTO> list = instanceMapper.selectInstanceList(managementStatus);
+        List<RedisInstance> instanceList = redisInstanceMapper.selectList(new LambdaQueryWrapper<RedisInstance>()
+                .select(RedisInstance::getInstanceId,
+                        RedisInstance::getInstanceName,
+                        RedisInstance::getHostIp,
+                        RedisInstance::getRedisPort,
+                        RedisInstance::getRole,
+                        RedisInstance::getRedisVersion,
+                        RedisInstance::getRunStatus,
+                        RedisInstance::getLastHeartbeatTime,
+                        RedisInstance::getMasterHostIp,
+                        RedisInstance::getMasterRedisPort
+                        )
+                .eq(RedisInstance::getManagementStatus, managementStatus)
+                .last("ORDER BY CASE role WHEN 'MASTER' THEN 0 ELSE 1 END, instance_name ASC")
+        );
+
+
+        List<RedisInstanceItemDTO> list = new ArrayList<>(instanceList.size());
         /*无心跳或心跳超时（默认70s."连续2次采集无心跳响应则离线"）为离线,有心跳且状态不是警告/严重时，正常*/
         LocalDateTime offlineBefore = LocalDateTime.now().minusSeconds(offlineThresholdSeconds);
-        for (RedisInstanceItemDTO row : list) {
-            row.setRunStatus(StatusEnum.descOf(row.getRunStatus()));
-            //无心跳、心跳超时
+        for (RedisInstance row : instanceList) {
+            RedisInstanceItemDTO item = new RedisInstanceItemDTO();
+            item.setInstanceId(row.getInstanceId());
+            item.setInstanceName(row.getInstanceName());
+            item.setHostIp(row.getHostIp());
+            item.setRedisPort(row.getRedisPort());
+            item.setRole(row.getRole());
+            item.setRedisVersion(row.getRedisVersion());
+            item.setLastHeartbeatTime(row.getLastHeartbeatTime());
+            item.setMasterHostIp(row.getMasterHostIp());
+            item.setMasterRedisPort(row.getMasterRedisPort());
+
+            //无心跳、心跳超时，离线；有心跳，但不是告警/严重，正常；其余情况保留原状态
             if (row.getLastHeartbeatTime() == null || row.getLastHeartbeatTime().isBefore(offlineBefore)) {
-                row.setRunStatus(StatusEnum.RUN_OFFLINE.getDesc());
-            } else if (row.getRunStatus() == null
-                    || (!StatusEnum.RUN_CRITICAL.getDesc().equals(row.getRunStatus())
-                    && !StatusEnum.RUN_WARNING.getDesc().equals(row.getRunStatus()))) {
-                row.setRunStatus(StatusEnum.RUN_NORMAL.getDesc());
+                item.setRunStatus(RunStatusEnum.RUN_OFFLINE.getDesc());
             }
+            else if (!RunStatusEnum.RUN_CRITICAL.getDesc().equals(row.getRunStatus())
+                    && !RunStatusEnum.RUN_WARNING.getDesc().equals(row.getRunStatus())) {
+                item.setRunStatus(RunStatusEnum.RUN_NORMAL.getDesc());
+            }
+            else{
+                item.setRunStatus(row.getRunStatus());
+            }
+
+            list.add(item);
+
         }
         caffeineCache.put(key, list);
         return list;
@@ -125,7 +169,8 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
      */
     @Override
     public MetricCurrentValueResponse getCurrentValues(String instanceId) {
-        RedisInstance inst = instanceMapper.selectByInstanceId(instanceId);
+        RedisInstance inst = redisInstanceService.getRedisInstance(instanceId);
+
         if (inst == null) {
             throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(), "实例不存在");
         }
@@ -136,14 +181,14 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return (MetricCurrentValueResponse) cached;
         }
 
-        List<Map<String, Object>> latestList = instanceMapper.selectLatestMetric(instanceId);
+        List<Map<String, Object>> latestList = redisInstanceMapper.selectLatestMetric(instanceId);
         Map<String, Object> latest = (latestList == null || latestList.isEmpty())
                 ? Collections.emptyMap() : latestList.get(0);
         if (latest == null) {
             latest = Collections.emptyMap();
         }
 
-        List<Map<String, Object>> prevList = instanceMapper.selectPrevMetric(instanceId);
+        List<Map<String, Object>> prevList = redisInstanceMapper.selectPrevMetric(instanceId);
         Map<String, Object> prev = (prevList == null || prevList.isEmpty())
                 ? Collections.emptyMap() : prevList.get(0);
 
@@ -152,7 +197,15 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         }
 
         // 查询启用中的、适用于当前实例的告警规则
-        List<AlarmRule> boundRules = alarmRuleMapper.selectEnabledRulesByInstance(instanceId);
+        List<AlarmRule> boundRules = alarmRuleMapper.selectList(new LambdaQueryWrapper<AlarmRule>()
+                .eq(AlarmRule::getEnableStatus, CommonConstant.ENABLE)
+                .and(w -> w.eq(AlarmRule::getScopeType, CommonConstant.ALL_INSTANCE_IDS)
+                        .or()
+                        .like(AlarmRule::getScopeInstanceId, instanceId)
+                )
+        );
+
+
         if (boundRules == null) {
             boundRules = Collections.emptyList();
         }
@@ -278,7 +331,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         boolean dualBandwidth = MetricTypeEnum.NET_INPUT_BANDWIDTH.getKey().equals(req.getMetricKey())
                 || MetricTypeEnum.NET_OUTPUT_BANDWIDTH.getKey().equals(req.getMetricKey());
 
-        List<Map<String, Object>> rows = instanceMapper.selectTrendData(
+        List<Map<String, Object>> rows = redisInstanceMapper.selectTrendData(
                 req.getInstanceIds(), req.getMetricKey(), bucketMinutes, dualBandwidth,
                 startTime.format(FORMATTER), endTime.format(FORMATTER));
 
@@ -415,8 +468,11 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return (TopologyResponse) cached;
         }
 
-        List<RedisInstance> instances = instanceMapper.selectActiveInstances("1");
-        List<AlarmRule> allRules = alarmRuleMapper.selectEnabledRules();
+        List<RedisInstance> instances = selectActiveInstances(CommonConstant.MANAGE_ACTIVE);
+
+        List<AlarmRule> allRules=alarmRuleMapper.selectList(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getEnableStatus, CommonConstant.ENABLE)
+        );
         if (allRules == null) {
             allRules = Collections.emptyList();
         }
@@ -471,7 +527,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
 
 
         // 最近一次切换事件
-        RedisSwitchEvent lastEvent = switchEventMapper.selectLatestSwitchEvent();
+        RedisSwitchEvent lastEvent = redisSwitchEventService.selectLatestSwitchEvent();
 
         TopologyResponse resp = new TopologyResponse();
         resp.setNodes(nodes);
@@ -494,8 +550,17 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             return ret;
         }
 
-        List<RedisInstance> instances = instanceMapper.selectActiveInstancesOrderByName("1");
-        List<AlarmRule> allRules = alarmRuleMapper.selectEnabledRules();
+        //询纳管中的实例，按名称排序,用于表格
+        List<RedisInstance> instances = redisInstanceMapper.selectList(new LambdaQueryWrapper<RedisInstance>()
+                .eq(RedisInstance::getManagementStatus,CommonConstant.MANAGE_ACTIVE)
+                .orderByAsc(RedisInstance::getInstanceName)
+        );
+
+        //所有启用的规则
+        List<AlarmRule> allRules= alarmRuleMapper.selectList(Wrappers.<AlarmRule>lambdaQuery()
+                .eq(AlarmRule::getEnableStatus, CommonConstant.ENABLE)
+        );
+
         if (allRules == null) {
             allRules = Collections.emptyList();
         }
@@ -515,17 +580,17 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
             m.setRole(i.getRole());
 
             // masterName 拼接为 host:port
-            masterIp = i.getMasterHostIp() == null ? "null" : i.getMasterHostIp();
-            masterPort = i.getMasterRedisPort() == null ? "null" : i.getMasterRedisPort();
+            masterIp = i.getMasterHostIp().equals("") ? "null" : i.getMasterHostIp();
+            masterPort = i.getMasterRedisPort().equals("") ? "null" : i.getMasterRedisPort();
             m.setMasterName(masterIp + ":" + masterPort);
 
             //复制延迟从 rms_metric_log 最新记录获取
             String replDelay = getLatestReplDelay(i.getInstanceId());
-            m.setCopyDelay(replDelay != null ? replDelay : "0");
+            m.setCopyDelay(!replDelay.equals("") ? replDelay : "0");
             //复制状态由告警规则判断
             m.setCopyStatus(judgeReplDelayStatus(i.getInstanceId(), replDelay, allRules));
             m.setRunStatus(StatusEnum.descOf(i.getRunStatus()));
-            if ("MASTER".equalsIgnoreCase(i.getRole())) {
+            if (CommonConstant.DEFAULT_ROLE_MASTER.equalsIgnoreCase(i.getRole())) {
                 masterRows.add(m);
             } else {
                 slaveRows.add(m);
@@ -567,9 +632,9 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
      */
     @Override
     public ReportQueryResponse buildReportData(String instanceId, String reportType) {
-        boolean daily = !"周报".equals(reportType);
+        boolean daily = !CommonConstant.REPORT_TYPE_WEEK.equals(reportType);
         LocalDateTime endTime = LocalDateTime.now();
-        // 当天报告：00:00 至当前时刻；近7天报告：当前日期向前推6天到当天共7自然日
+        // 日报：00:00 至当前时刻； 周报：当前日期向前推6天到当天共7自然日
         LocalDateTime startTime = daily
                 ? endTime.toLocalDate().atStartOfDay()
                 : endTime.toLocalDate().minusDays(6).atStartOfDay();
@@ -579,32 +644,36 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         ReportQueryResponse resp = new ReportQueryResponse();
 
         // 概览统计
-        List<Map<String, Object>> statsList = instanceMapper.selectReportOverviewStats(
+        List<Map<String, Object>> statsList = redisInstanceMapper.selectReportOverviewStats(
                 instanceId, startText, endText);
         Map<String, Object> stats = (statsList == null || statsList.isEmpty())
                 ? Collections.emptyMap() : statsList.get(0);
 
         ReportOverviewDTO ov = new ReportOverviewDTO();
-        ov.setCpuAvg(toDouble(stats.get("cpuAvg")));
-        ov.setCpuMax(toDouble(stats.get("cpuMax")));
+        ov.setCpuAvg(stats.get("cpuAvg").toString());
+        ov.setCpuMax(stats.get("cpuMax").toString());
         ov.setCpuMaxTim(toLocalDateTime(stats.get("cpuMaxTim")));
-        ov.setRedisMemAvg(toDouble(stats.get("redisMemAvg")));
-        ov.setRedisMemMax(toDouble(stats.get("redisMemMax")));
+        ov.setRedisMemAvg(stats.get("redisMemAvg").toString());
+        ov.setRedisMemMax(stats.get("redisMemMax").toString());
         ov.setRedisMemMaxTim(toLocalDateTime(stats.get("redisMemMaxTim")));
-        ov.setQpsAvg(toDouble(stats.get("qpsAvg")));
-        ov.setQpsMax(toDouble(stats.get("qpsMax")));
+        ov.setQpsAvg(stats.get("qpsAvg").toString());
+        ov.setQpsMax(stats.get("qpsMax").toString());
         ov.setQpsMaxTim(toLocalDateTime(stats.get("qpsMaxTim")));
-        ov.setLatencyAvg(toDouble(stats.get("latencyAvg")));
-        ov.setLatencyMax(toDouble(stats.get("latencyMax")));
+        ov.setLatencyAvg(stats.get("latencyAvg").toString());
+        ov.setLatencyMax(stats.get("latencyMax").toString());
         ov.setLatencyMaxTim(toLocalDateTime(stats.get("latencyMaxTim")));
 
         // 告警统计（按时间范围，可按实例过滤）
-        Map<String, Object> alarmStats = alarmRecordMapper.selectReportAlarmStats(
+        List<Map<String, Object>> alarmStatsMap = alarmRecordMapper.selectReportAlarmStats(
                 instanceId, startText, endText);
+        Map<String, Object> alarmStats=alarmStatsMap.isEmpty() ? null : alarmStatsMap.get(0);
+
+
         if (alarmStats == null) {
             alarmStats = Collections.emptyMap();
         }
         ov.setAlarmTotal(toLong(alarmStats.get("alarmTotal")));
+
         ReportOverviewDTO.AlarmSeverityCountDTO severity = new ReportOverviewDTO.AlarmSeverityCountDTO();
         severity.setInfo(toLong(alarmStats.get("infoCount")));
         severity.setAlarm(toLong(alarmStats.get("alarmCount")));
@@ -612,14 +681,16 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         ov.setAlarmSeverityCount(severity);
 
         // 主从切换统计
-        Map<String, Object> switchStats = switchEventMapper.selectSwitchStats(startText, endText);
+        List<Map<String, Object>> switchStatsMap = switchEventMapper.selectSwitchStats(startText, endText);
+        Map<String, Object> switchStats=switchStatsMap.isEmpty() ? null : switchStatsMap.get(0);
+
         if (switchStats == null) {
             switchStats = Collections.emptyMap();
         }
         ov.setSwitchTotal(toLong(switchStats.get("switchTotal")));
         ov.setLastSwitchTime(toLocalDateTime(switchStats.get("lastSwitchTime")));
 
-        // 节点可用率：实际采集点数 / 理论采集点数（5分钟一个采集周期）
+        // 节点可用率/节点数据完整度：实际采集点数 / 理论采集点数（5分钟一个采集周期）
         long collectCount = toLong(stats.get("collectCount")) == null ? 0L : toLong(stats.get("collectCount"));
         long theoryMinutes = ChronoUnit.MINUTES.between(startTime, endTime);
         long theoryCount = Math.max(1L, theoryMinutes / 5);
@@ -632,12 +703,12 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         ov.setServiceAvailableRate(rate);
 
         // 主/从节点数（集群口径）
-        List<RedisInstance> allInstances = instanceMapper.selectActiveInstances("1");
+        List<RedisInstance> allInstances = selectActiveInstances(CommonConstant.MANAGE_ACTIVE);
         long masterCount = 0;
         long replicaCount = 0;
-        if (allInstances != null) {
+        if (!allInstances.isEmpty()) {
             for (RedisInstance instance : allInstances) {
-                if ("MASTER".equalsIgnoreCase(instance.getRole())) {
+                if (CommonConstant.DEFAULT_ROLE_MASTER.equalsIgnoreCase(instance.getRole())) {
                     masterCount++;
                 } else {
                     replicaCount++;
@@ -653,13 +724,14 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         // 当天按小时聚合，近7天按天聚合
         int bucketMinutes = daily ? 60 : 1440;
         boolean truncateDay = !daily;
-        List<Map<String, Object>> trendRows = instanceMapper.selectReportTrend(
+        List<Map<String, Object>> trendRows = redisInstanceMapper.selectReportTrend(
                 instanceId, startText, endText, bucketMinutes, truncateDay);
         resp.setTrendList(buildReportTrends(trendRows, startTime, endTime, bucketMinutes));
 
         // 告警与切换事件合并列表
         List<Map<String, Object>> alarmRows = alarmRecordMapper.selectReportEventList(
                 instanceId, startText, endText, 500);
+
         List<Map<String, Object>> switchRows = switchEventMapper.selectSwitchEventList(
                 startText, endText, 500);
         resp.setEventList(buildReportEvents(alarmRows, switchRows));
@@ -817,7 +889,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
      */
     @Override
     public ReportExportResponse exportReport(String instanceId, String reportType) {
-        String taskId = "export_" + System.currentTimeMillis();
+        String taskId = "EP_" + IdUtil.getSnowflakeNextIdStr();;
         ReportExportTaskHolder.ExportTask task = taskHolder.createTask(taskId);
         // 异步执行（AsyncTaskRunner 为独立 Bean，保证 @Async 生效）
         asyncTaskRunner.run(() -> doExport(taskId, instanceId, reportType));
@@ -829,8 +901,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
     }
 
     /**
-     * 报告导出异步任务执行体：生成文件并更新任务状态。
-     * 逻辑由原 ReportExportExecutor.run 迁入，行为保持不变。
+     * 报告导出异步任务执行体：生成文件并更新任务状态
      */
     private void doExport(String taskId, String instanceId, String reportType) {
         ReportExportTaskHolder.ExportTask task = taskHolder.getTask(taskId);
@@ -848,7 +919,7 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
 
             task.setFilePath(file.getAbsolutePath());
             task.setFileName(file.getName());
-            task.setDownloadUrl("/api/monitor/report/export/download?taskId=" + taskId);
+            task.setDownloadUrl("/monitor/report/export/download?taskId=" + taskId);
             task.setTaskStatus("success");
 
             /* 将操作人、文件id、报告类型、导出实例、时间范围、操作类型、操作时间记入操作审计日志 */
@@ -958,7 +1029,49 @@ public class RedisInstanceServiceImpl extends ServiceImpl<RedisInstanceMapper, R
         if (inst.getLastHeartbeatTime() == null) {
             return false;
         }
-        String desc = StatusEnum.descOf(inst.getRunStatus());
-        return !StatusEnum.RUN_OFFLINE.getDesc().equals(desc);
+        String desc = RunStatusEnum.descOf(inst.getRunStatus());
+        return !RunStatusEnum.RUN_OFFLINE.getDesc().equals(desc);
     }
+
+    /**
+     * 更新实例表，心跳、运行状态
+     * @param instanceId
+     * @param now
+     * @param runStatus
+     * @return
+     */
+    public Boolean updateHeartbeatAndStatus(String instanceId, LocalDateTime now, String runStatus) {
+        int rows=redisInstanceMapper.update(null,new LambdaUpdateWrapper<RedisInstance>()
+                .set(RedisInstance::getLastHeartbeatTime,now)
+                .set(RedisInstance::getRunStatus,runStatus)
+                .set(RedisInstance::getUpdatedTime,now)
+                .eq(RedisInstance::getInstanceId,instanceId)
+        );
+        if(rows>0) {
+            log.info("执行器上报实例心跳、运行状态更新:{}",CommonConstant.SUCCESS);
+            return true;
+        }
+        else {
+            log.info("执行器上报实例心跳、运行状态更新:{}",CommonConstant.FAILURE);
+            return false;
+        }
+    }
+
+    public RedisInstance getRedisInstance(String instanceId) {
+        RedisInstance instance = redisInstanceMapper.selectOne(Wrappers.<RedisInstance>lambdaQuery()
+                .eq(RedisInstance::getInstanceId,instanceId));
+        return instance;
+    }
+
+
+
+    /** 查询纳管中的实例,用于拓扑 */
+    public List<RedisInstance> selectActiveInstances(String managementStatus) {
+        List<RedisInstance> instances = redisInstanceMapper.selectList(new LambdaQueryWrapper<RedisInstance>()
+                .eq(RedisInstance::getManagementStatus,managementStatus)
+        );
+        return instances;
+    }
+
+
 }

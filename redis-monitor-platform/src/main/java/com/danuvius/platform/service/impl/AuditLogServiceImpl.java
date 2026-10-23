@@ -1,5 +1,7 @@
 package com.danuvius.platform.service.impl;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.danuvius.platform.mapper.AuditLogMapper;
 import com.danuvius.platform.model.dto.audit.AuditLogItemDTO;
@@ -8,6 +10,7 @@ import com.danuvius.platform.model.dto.audit.AuditLogPageResponse;
 import com.danuvius.platform.model.entity.AuditLog;
 import com.danuvius.platform.service.AuditLogService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -25,7 +28,7 @@ import java.util.UUID;
 public class AuditLogServiceImpl extends ServiceImpl<AuditLogMapper, AuditLog>
         implements AuditLogService {
 
-    /** 默认操作人（当前平台无登录认证体系，可由请求头覆盖） */
+    /** 默认操作人（可由请求头覆盖） */
     private static final String DEFAULT_OPERATOR_ID = "system";
     private static final String DEFAULT_OPERATOR_NAME = "系统";
 
@@ -37,8 +40,10 @@ public class AuditLogServiceImpl extends ServiceImpl<AuditLogMapper, AuditLog>
 
     @Override
     public void record(String module, String operationType, String targetId, String content) {
+        //Todo 结合统一认证号修改
         String operatorId = DEFAULT_OPERATOR_ID;
         String operatorName = DEFAULT_OPERATOR_NAME;
+
         try {
             ServletRequestAttributes attributes =
                     (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
@@ -59,6 +64,8 @@ public class AuditLogServiceImpl extends ServiceImpl<AuditLogMapper, AuditLog>
         record(operatorId, operatorName, module, operationType, targetId, content, "成功");
     }
 
+
+    /*插表*/
     @Override
     public void record(String operatorId, String operatorName, String module, String operationType,
                        String targetId, String content, String operationResult) {
@@ -82,25 +89,33 @@ public class AuditLogServiceImpl extends ServiceImpl<AuditLogMapper, AuditLog>
         }
     }
 
+    /**
+     * 拉审计表记录
+     * @param req
+     * @return
+     */
     @Override
     public AuditLogPageResponse getAuditLogPage(AuditLogPageRequest req) {
-        int pageNum = req.getPageNum() == null || req.getPageNum() < 1 ? 1 : req.getPageNum();
-        int pageSize = req.getPageSize() == null || req.getPageSize() < 1 ? 12 : req.getPageSize();
-        int offset = (pageNum - 1) * pageSize;
+        int pageNum = req.getPageNum();
+        int pageSize = req.getPageSize();
 
-        List<AuditLogItemDTO> list = auditLogMapper.selectAuditLogPage(
-                req.getModule(), req.getOperationType(), req.getKeyword(),
-                req.getStartTime(), req.getEndTime(), offset, pageSize);
-        long total = auditLogMapper.countAuditLogPage(
-                req.getModule(), req.getOperationType(), req.getKeyword(),
-                req.getStartTime(), req.getEndTime());
+
+        Page<AuditLog> page = page(new Page<>(pageNum, pageSize), Wrappers.<AuditLog>lambdaQuery()
+                .eq(StringUtils.isNotBlank(req.getModule()),AuditLog::getModule, req.getModule())
+                .eq(StringUtils.isNotBlank(req.getOperationType()),AuditLog::getOperationType, req.getOperationType())
+                .and(StringUtils.isNotBlank(req.getKeyword()), i->
+                        i.like(AuditLog::getOperationContent, req.getKeyword())
+                                .or()
+                                .like(AuditLog::getOperatorName, req.getKeyword())
+                )
+                .ge(StringUtils.isNotBlank(req.getStartTime()), AuditLog::getOperationTime,req.getStartTime())
+                .le(StringUtils.isNotBlank(req.getEndTime()), AuditLog::getOperationTime,req.getEndTime())
+                .orderByDesc(AuditLog::getOperationTime)
+        );
+
 
         AuditLogPageResponse resp = new AuditLogPageResponse();
-        resp.setTotal(total);
-        resp.setPageNum(pageNum);
-        resp.setPageSize(pageSize);
-        resp.setTotalPages((int) Math.ceil((double) total / pageSize));
-        resp.setList(list);
+        resp.setPage(page);
         return resp;
     }
 }

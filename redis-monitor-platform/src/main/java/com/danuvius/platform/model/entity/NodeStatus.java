@@ -12,7 +12,7 @@ import java.util.Date;
 @TableName("rms_node_status_log")
 public class NodeStatus {
 
-    /*主键id*/
+    /*节点状态记录id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
     /*实例id*/

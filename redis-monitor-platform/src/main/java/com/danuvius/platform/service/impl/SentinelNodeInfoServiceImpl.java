@@ -1,5 +1,6 @@
 package com.danuvius.platform.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.danuvius.platform.mapper.SentinelNodeInfoMapper;
 import com.danuvius.platform.model.dto.monitor.SentinelItemResponse;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -48,12 +50,16 @@ public class SentinelNodeInfoServiceImpl extends ServiceImpl<SentinelNodeInfoMap
         }
 
         //查询 Sentinel 节点列表
-        List<SentinelNodeInfo> list = sentinelMapper.selectSentinelList(managementStatus);
+        List<SentinelNodeInfo> list = sentinelMapper.selectList(new LambdaQueryWrapper<SentinelNodeInfo>()
+                .eq(SentinelNodeInfo::getManagementStatus, managementStatus)
+                .orderByAsc(SentinelNodeInfo::getNodeName)
+        );
+
 
         LocalDateTime offlineBefore = LocalDateTime.now().minusSeconds(offlineThresholdSeconds);
 
         List<SentinelItemResponse> result = new ArrayList<>();
-        if (list != null) {
+        if (!list.isEmpty()) {
             for (SentinelNodeInfo s : list) {
                 SentinelItemResponse m = new SentinelItemResponse();
                 m.setSentinelId(s.getId());
@@ -69,7 +75,7 @@ public class SentinelNodeInfoServiceImpl extends ServiceImpl<SentinelNodeInfoMap
                 m.setLastHeartbeatTime(s.getLastHeartbeatTime());
                 result.add(m);
             }
-        }
+        }else result= Collections.emptyList();
 
         caffeineCache.put(key, result);
         return result;

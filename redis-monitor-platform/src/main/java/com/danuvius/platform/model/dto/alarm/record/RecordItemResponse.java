@@ -10,6 +10,8 @@ import java.time.LocalDateTime;
  */
 @Data
 public class RecordItemResponse implements Serializable {
+    /*告警记录id*/
+    private String alarmRecordId;
     /*告警编号*/
     private String alarmNo;
     /*关联告警规则id*/

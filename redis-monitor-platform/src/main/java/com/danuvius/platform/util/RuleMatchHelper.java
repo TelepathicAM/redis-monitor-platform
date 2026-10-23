@@ -1,5 +1,7 @@
 package com.danuvius.platform.util;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.danuvius.platform.common.constant.CommonConstant;
 import com.danuvius.platform.mapper.RedisInstanceMapper;
 import com.danuvius.platform.model.entity.AlarmRule;
 import com.danuvius.platform.model.entity.RedisInstance;
@@ -24,14 +26,18 @@ public class RuleMatchHelper {
      */
     public List<String> resolveRuleInstanceIds(AlarmRule rule) {
         List<String> result = new ArrayList<>();
-        if ("1".equals(rule.getScopeType())) {
-            List<RedisInstance> all = redisInstanceMapper.selectActiveInstances("1");
-            if (all != null) {
-                for (RedisInstance i : all) {
+        if (CommonConstant.ALL_INSTANCE_IDS.equals(rule.getScopeType())) {
+
+            List<RedisInstance> activeList = redisInstanceMapper.selectList(
+                    new LambdaQueryWrapper<RedisInstance>()
+                            .eq(RedisInstance::getManagementStatus, CommonConstant.MANAGE_ACTIVE));
+
+            if (activeList != null) {
+                for (RedisInstance i : activeList) {
                     result.add(i.getInstanceId());
                 }
             }
-        } else if ("2".equals(rule.getScopeType())) {
+        } else if (CommonConstant.SPECIFIED_INSTNACE_ID.equals(rule.getScopeType())) {
             String ids = rule.getScopeInstanceId();
             if (ids != null && !ids.isEmpty()) {
                 String[] arr = ids.split(",");
@@ -54,10 +60,10 @@ public class RuleMatchHelper {
             return false;
         }
         String scopeType = rule.getScopeType();
-        if ("1".equals(scopeType)) {
+        if (CommonConstant.ALL_INSTANCE_IDS.equals(scopeType)) {
             return true;
         }
-        if ("2".equals(scopeType)) {
+        if (CommonConstant.SPECIFIED_INSTNACE_ID.equals(scopeType)) {
             String ids = rule.getScopeInstanceId();
             if (ids == null || ids.isEmpty()) {
                 return false;

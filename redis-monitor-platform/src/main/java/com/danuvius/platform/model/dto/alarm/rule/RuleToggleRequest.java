@@ -11,6 +11,6 @@ import java.io.Serializable;
 public class RuleToggleRequest implements Serializable {
     /*告警规则id*/
     private String ruleId;
-    /*目标启用状态：true 启用 / false 禁用*/
-    private Boolean enableStatus;
+    /*目标启用状态：1= 启用 / 0 禁用*/
+    private String enableStatus;
 }

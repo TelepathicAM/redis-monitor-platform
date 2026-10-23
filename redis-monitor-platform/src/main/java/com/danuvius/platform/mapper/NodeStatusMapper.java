@@ -9,5 +9,5 @@ import java.time.LocalDateTime;
 
 @Mapper
 public interface NodeStatusMapper extends BaseMapper<NodeStatus> {
-    int deleteExpiredBefore(@Param("threshold") LocalDateTime threshold);
+
 }

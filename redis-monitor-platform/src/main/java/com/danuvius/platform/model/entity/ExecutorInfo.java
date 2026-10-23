@@ -12,12 +12,10 @@ import java.util.Date;
 @TableName("executor_info")
 public class ExecutorInfo {
 
-    /*主键id*/
+    /*执行器id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
-    /*执行器业务id（雪花id）*/
-    private String executorId;
-    /*执行器绑定的 Redis 实例id*/
+    /*执行器绑定的 Redis 实例id，雪花*/
     private String instanceId;
     /*执行器所在服务器IP*/
     private String hostIp;

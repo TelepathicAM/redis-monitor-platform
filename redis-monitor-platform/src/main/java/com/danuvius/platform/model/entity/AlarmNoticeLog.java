@@ -13,11 +13,11 @@ import java.time.LocalDateTime;
 @Data
 @TableName("alarm_notice_log")
 public class AlarmNoticeLog {
-
+    /** 通知记录id */
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
 
-    /** 告警记录id */
+    /** 告警记录id，对应alarm_record的id */
     private String alarmRecordId;
 
     /** 告警编号 */

@@ -7,6 +7,7 @@ import com.danuvius.platform.model.dto.monitor.ReportTrendDTO;
 import com.lowagie.text.Document;
 import com.lowagie.text.Font;
 import com.lowagie.text.Paragraph;
+import com.lowagie.text.pdf.BaseFont;
 import com.lowagie.text.pdf.PdfWriter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -30,6 +31,8 @@ import java.util.List;
 public class ReportFileGenerator {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static BaseFont CN_FONT;
+    private static final Object FONT_LOCK = new Object();
 
     /**
      * 生成导出文件。
@@ -118,14 +121,31 @@ public class ReportFileGenerator {
         Files.write(file.toPath(), sb.toString().getBytes(StandardCharsets.UTF_8));
     }
 
+    private BaseFont cnBaseFont() throws Exception {
+        if (CN_FONT == null) {
+            synchronized (FONT_LOCK) {
+                if (CN_FONT == null) {
+                    byte[] fontBytes = org.springframework.util.StreamUtils.copyToByteArray(
+                            getClass().getResourceAsStream("/fonts/simhei.ttf"));
+                    CN_FONT = BaseFont.createFont("simhei.ttf", BaseFont.IDENTITY_H,
+                            BaseFont.EMBEDDED, BaseFont.CACHED, fontBytes, null);
+                }
+            }
+        }
+        return CN_FONT;
+    }
+
+    // ---------------------------------------------------------------- PDF
     private void writePdf(File file, ReportQueryResponse report, String instanceId,
                           String reportType) throws IOException {
         Document document = new Document();
         try (FileOutputStream out = new FileOutputStream(file)) {
             PdfWriter.getInstance(document, out);
             document.open();
-            Font h1 = new Font(Font.HELVETICA, 16, Font.BOLD);
-            Font h2 = new Font(Font.HELVETICA, 12, Font.BOLD);
+            Font h1 = new Font(cnBaseFont(), 16, Font.BOLD);
+            Font h2 = new Font(cnBaseFont(), 12, Font.BOLD);
+            Font body = new Font(cnBaseFont(), 10, Font.NORMAL);
+
 
             document.add(new Paragraph("Redis 运行报告（" + reportType + "）", h1));
             document.add(new Paragraph("实例：" + instanceId + "　生成时间："

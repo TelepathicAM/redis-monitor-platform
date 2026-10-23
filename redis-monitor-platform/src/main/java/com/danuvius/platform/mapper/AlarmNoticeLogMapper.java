@@ -13,6 +13,5 @@ import java.util.List;
 @Mapper
 public interface AlarmNoticeLogMapper extends BaseMapper<AlarmNoticeLog> {
 
-    /** 查询某条告警的全部通知记录，按发送时间倒序 */
-    List<AlarmNoticeLog> selectByAlarmRecordId(@Param("alarmRecordId") String alarmRecordId);
+
 }

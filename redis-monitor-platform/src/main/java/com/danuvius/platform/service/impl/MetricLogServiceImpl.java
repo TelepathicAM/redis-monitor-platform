@@ -1,11 +1,24 @@
 package com.danuvius.platform.service.impl;
 
+import cn.hutool.core.util.IdUtil;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.danuvius.platform.common.constant.CommonConstant;
+import com.danuvius.platform.common.exception.BusinessCode;
+import com.danuvius.platform.common.exception.BusinessException;
 import com.danuvius.platform.mapper.*;
 import com.danuvius.platform.model.dto.metric.MetricReportItemDTO;
 import com.danuvius.platform.model.entity.*;
 import com.danuvius.platform.model.enums.*;
+import com.danuvius.platform.model.enums.rule.AlarmLevelEnum;
+import com.danuvius.platform.model.enums.instance.RunStatusEnum;
 import com.danuvius.platform.service.MetricLogService;
+import com.danuvius.platform.service.RedisInstanceService;
+import com.danuvius.platform.service.RedisSwitchEventService;
 import com.danuvius.platform.util.CacheKeyUtil;
 import com.github.benmanes.caffeine.cache.Cache;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +27,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Slf4j
 @Service
@@ -31,6 +43,8 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     private final RedisSwitchEventMapper switchEventMapper;
     private final ExecutorInfoMapper executorInfoMapper;
     private final AlarmRecordMapper alarmRecordMapper;
+    private final RedisInstanceService redisInstanceService;
+    private final RedisSwitchEventService redisSwitchEventService;
     private final Cache<String, Object> caffeineCache;
 
     public MetricLogServiceImpl(MetricLogMapper metricLogMapper,
@@ -39,6 +53,8 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
                                 RedisSwitchEventMapper switchEventMapper,
                                 ExecutorInfoMapper executorInfoMapper,
                                 AlarmRecordMapper alarmRecordMapper,
+                                RedisInstanceService redisInstanceService,
+                                RedisSwitchEventService redisSwitchEventService,
                                 Cache<String, Object> caffeineCache) {
         this.metricLogMapper = metricLogMapper;
         this.nodeStatusMapper = nodeStatusMapper;
@@ -46,19 +62,25 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
         this.switchEventMapper = switchEventMapper;
         this.executorInfoMapper = executorInfoMapper;
         this.alarmRecordMapper = alarmRecordMapper;
+        this.redisInstanceService = redisInstanceService;
+        this.redisSwitchEventService = redisSwitchEventService;
         this.caffeineCache = caffeineCache;
     }
 
     @Override
     public void reportMetric(MetricReportItemDTO metric) {
-        ExecutorInfo executor = executorInfoMapper.selectByToken(metric.getToken());
+        ExecutorInfo executor=executorInfoMapper.selectOne(Wrappers.<ExecutorInfo>lambdaQuery()
+                .eq(ExecutorInfo::getExecutorToken,metric.getToken())
+        );
+
         if (executor == null) {
-            throw new RuntimeException("无效的token");
+            throw new BusinessException(BusinessCode.PARAMS_ERROR.getCode(),"无效的token");
         }
 
         String instanceId = executor.getInstanceId();
         if (instanceId == null || instanceId.trim().isEmpty()) {
-            throw new RuntimeException("执行器未绑定实例");
+            throw new BusinessException(BusinessCode.NOT_FOUND_ERROR.getCode(),"执行器尚未完成 Redis 安装与实例绑定，" +
+                    "请执行器在本地 Redis 就绪后携带 redisReady=true 与 redisInfo 再次调用 /agent/register");
         }
 
         // 平台内部回填
@@ -68,7 +90,6 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
 
         // 写指标日志
         MetricLog metricLog = new MetricLog();
-
         metricLog.setInstanceId(metric.getInstanceId());
         metricLog.setTm(now);
         metricLog.setCpuPer(metric.getCpuPer());
@@ -78,22 +99,20 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
         metricLog.setIoIik(metric.getIoIik());
         metricLog.setIoIok(metric.getIoIok());
         metricLog.setOps(metric.getOps());
-        metricLog.setRole(metric.getRole());
-        metricLog.setRedisVersion(metric.getRedisVersion());
+        metricLog.setReplDelay(metric.getReplDelay());
         metricLog.setRunId(metric.getRunId());
         metricLog.setMasterHost(metric.getMasterHost());
         metricLog.setMasterPort(metric.getMasterPort());
-        metricLog.setReplDelay(metric.getReplDelay());
-
-        metricLog.setCollectType("1".equals(metric.getCollectType()) ? "1" : "0");
-
+        metricLog.setRole(metric.getRole());
+        metricLog.setRedisVersion(metric.getRedisVersion());
+        metricLog.setCollectType(metric.getCollectType());
         metricLog.setCreatedTime(now);
         metricLog.setUpdatedTime(now);
         metricLogMapper.insert(metricLog);
 
         // 采集上报成功时同步更新redis_instance 最后心跳时间与运行状态
-        redisInstanceMapper.updateHeartbeatAndStatus(metric.getInstanceId(), now,
-                StatusEnum.RUN_NORMAL.getCode());
+        redisInstanceService.updateHeartbeatAndStatus(metric.getInstanceId(), now, CommonConstant.RUN_NORMAL);
+
 
         // 写节点状态日志
         NodeStatus ns = new NodeStatus();
@@ -101,9 +120,9 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
         ns.setRunId(metric.getRunId());
         ns.setTm(now);
         // 能收到采集信息，默认在线
-        ns.setCollectStatus("1");
+        ns.setCollectStatus(CommonConstant.ONLINE);
         // 执行器端上报的连通性延迟，没有则默认 0
-        ns.setPingLatency(metric.getPingLatency() != null ? metric.getPingLatency() : "0");
+        ns.setPingLatency(metric.getPingLatency());
         ns.setRole(metric.getRole());
         ns.setErrorMsg(metric.getErrorMsg());
         ns.setCreatedTime(now);
@@ -121,78 +140,87 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     private void detectMasterSwitch(MetricReportItemDTO metric, LocalDateTime now) {
         String instanceId = metric.getInstanceId();
         String role = metric.getRole();
-        if (instanceId == null || role == null) {
-            return;
-        }
-
-        RedisInstance inst = redisInstanceMapper.selectByInstanceId(instanceId);
+        RedisInstance inst = redisInstanceService.getRedisInstance(instanceId);
         if (inst == null) {
             return;
         }
 
         boolean changed = false;
         if (!role.equalsIgnoreCase(inst.getRole())) {
-            inst.setRole(role);
             changed = true;
         }
+        String masterHost="";
+        String masterPort="";
         if (ROLE_MASTER.equalsIgnoreCase(role)) {
-            if (inst.getMasterHostIp() != null || inst.getMasterRedisPort() != null) {
-                inst.setMasterHostIp(null);
-                inst.setMasterRedisPort(null);
+            if (inst.getMasterHostIp() != "" || inst.getMasterRedisPort() != "") {
                 changed = true;
             }
         } else {
-            String masterHost = metric.getMasterHost();
-            String masterPort = metric.getMasterPort();
-            if (!equalsNullable(masterHost, inst.getMasterHostIp())
-                    || !equalsNullable(masterPort, inst.getMasterRedisPort())) {
-                inst.setMasterHostIp(masterHost);
-                inst.setMasterRedisPort(masterPort);
+
+            if (!equalsNullable(metric.getMasterHost(), inst.getMasterHostIp())
+                    || !equalsNullable(metric.getMasterPort(), inst.getMasterRedisPort())) {
+                masterHost = metric.getMasterHost();
+                masterPort = metric.getMasterPort();
                 changed = true;
             }
         }
         if (changed) {
-            inst.setUpdatedTime(now);
-            redisInstanceMapper.updateById(inst);
-        }
+            int rows=redisInstanceMapper.update(null,new LambdaUpdateWrapper<RedisInstance>()
+                    .set(RedisInstance::getRole,role)
+                    .set(RedisInstance::getMasterHostIp,masterHost)
+                    .set(RedisInstance::getMasterRedisPort,masterPort)
+                    .set(RedisInstance::getUpdatedTime,now)
+                    .eq(RedisInstance::getInstanceId,instanceId)
 
+            );
+            if(rows>0) {
+                log.info("节点角色更新：{}",CommonConstant.SUCCESS);
+            }
+            else{
+                log.info("节点角色更新：{}",CommonConstant.FAILURE);
+            }
+
+        }
+        //role 为MASTER再继续执行
         if (!ROLE_MASTER.equalsIgnoreCase(role)) {
             return;
         }
-
-        RedisSwitchEvent lastEvent = switchEventMapper.selectLatestSwitchEvent();
+        RedisSwitchEvent lastEvent = redisSwitchEventService.selectLatestSwitchEvent();
         String lastMasterId = lastEvent == null ? null : lastEvent.getNewMasterId();
-
-        if (lastEvent == null) {
-            insertSwitchEvent(null, instanceId, TypeEnum.INIT, now);
-            log.info("[主从切换检测] 建立初始主基线: masterId={}", instanceId);
-            return;
-        }
+        //主节点没变，返回
         if (instanceId.equals(lastMasterId)) {
             return;
         }
+        //无记录，插入初始基准记录
+        if (lastEvent == null) {
+            insertSwitchEvent("", instanceId, CommonConstant.SWITCH_INIT, now);
+            log.info("[主从切换检测] 建立初始主基线: masterId={}", instanceId);
+            return;
+        }
 
-        insertSwitchEvent(lastMasterId, instanceId, TypeEnum.AUTO, now);
+
+        insertSwitchEvent(lastMasterId, instanceId, CommonConstant.SWITCH_AUTO, now);
         caffeineCache.invalidate(CacheKeyUtil.TOPOLOGY);
         caffeineCache.invalidate(CacheKeyUtil.NODES);
         log.info("[主从切换检测] 检测到主节点变更: {} -> {}", lastMasterId, instanceId);
     }
 
+
     private void insertSwitchEvent(String oldMasterId, String newMasterId,
-                                   TypeEnum type, LocalDateTime now) {
+                                   String switchType, LocalDateTime now) {
         RedisSwitchEvent event = new RedisSwitchEvent();
 
         event.setOldMasterId(oldMasterId);
         event.setNewMasterId(newMasterId);
         event.setSwitchTime(now);
-        event.setSwitchType(type.getCode());
-        event.setSwitchResult(StatusEnum.SUCCESS.getCode());
+        event.setSwitchType(switchType);
+        event.setSwitchResult(CommonConstant.SWITCH_SUCCESS);
         event.setCreatedTime(now);
         event.setUpdatedTime(now);
         switchEventMapper.insert(event);
 
         /* 检测到主节点变更时，除失效拓扑/节点状态缓存外，同时生成告警记录 */
-        if (type == TypeEnum.AUTO) {
+        if (switchType.equals(CommonConstant.SWITCH_AUTO)) {
             generateSwitchAlarm(oldMasterId, newMasterId, now);
         }
     }
@@ -206,23 +234,24 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
     private void generateSwitchAlarm(String oldMasterId, String newMasterId, LocalDateTime now) {
         try {
             AlarmRecord record = new AlarmRecord();
-            record.setAlarmNo("AL" + System.currentTimeMillis()
+            record.setAlarmNo("AL" + IdUtil.getSnowflakeNextIdStr()
                     + String.format("%03d", (int) (Math.random() * 1000)));
             // 系统切换事件，不关联具体规则
-            record.setRuleId(null);
+            record.setRuleId("");
             record.setInstanceId(newMasterId);
-            record.setMetricKey(TypeEnum.MASTER_SWITCH.getCode());
-            record.setMetricName(TypeEnum.MASTER_SWITCH.getDesc());
+            record.setMetricKey(CommonConstant.MASTER_SWITCH);
+            record.setMetricName(CommonConstant.MASTER_SWITCH_DESC);
             record.setAlarmLevel(AlarmLevelEnum.WARNING.getCode());
             record.setAlarmContent("检测到主从切换：原主节点 " + (oldMasterId == null ? "null" : oldMasterId)
                     + " → 新主节点 " + newMasterId);
             record.setTriggerValue("");
             record.setUnit("");
             record.setTriggerTime(now);
-            record.setRecoverStatus(StatusEnum.UNRECOVER.getCode());
+            record.setRecoverStatus(CommonConstant.STATUS_UNRECOVER);
             record.setCreatedTime(now);
             record.setUpdatedTime(now);
             alarmRecordMapper.insert(record);
+
             log.info("[主从切换检测] 已生成切换告警记录, alarmNo={}", record.getAlarmNo());
         } catch (Exception e) {
             log.error("[主从切换检测] 生成切换告警记录失败, newMasterId={}", newMasterId, e);
@@ -243,14 +272,36 @@ public class MetricLogServiceImpl extends ServiceImpl<MetricLogMapper, MetricLog
      */
     @Override
     public MetricLog getLatestByInstanceId(String instanceId) {
-        return metricLogMapper.selectLatestByInstanceId(instanceId);
+        MetricLog metricLog = metricLogMapper.selectOne(Wrappers.<MetricLog>lambdaQuery().eq(MetricLog::getInstanceId, instanceId));
+        return metricLog;
     }
 
     @Override
     @Scheduled(cron = "0 0 3 * * ?")
     public void cleanExpiredData() {
         LocalDateTime threshold = LocalDateTime.now().minusDays(retainDays);
-        metricLogMapper.deleteExpiredBefore(threshold);
-        nodeStatusMapper.deleteExpiredBefore(threshold);
+
+        int rowsM = metricLogMapper.delete(new LambdaQueryWrapper<MetricLog>()
+                        .lt(MetricLog::getTm, threshold));
+        if (rowsM>0) {
+            log.info("采集数据表rms_metric_log定期清理结果：{}", CommonConstant.SUCCESS);
+        }
+        else{
+            log.info("采集数据表rms_metric_log定期清理结果：{}", CommonConstant.FAILURE);
+
+        }
+
+        int rowsN = nodeStatusMapper.delete(new LambdaQueryWrapper<NodeStatus>()
+                .lt(NodeStatus::getTm, threshold));
+
+        if (rowsN>0) {
+            log.info("节点状态表rms_node_status_log定期清理结果：{}", CommonConstant.SUCCESS);
+        }
+        else{
+            log.info("节点状态表rms_node_status_log定期清理结果：{}", CommonConstant.FAILURE);
+
+        }
+
+
     }
 }
