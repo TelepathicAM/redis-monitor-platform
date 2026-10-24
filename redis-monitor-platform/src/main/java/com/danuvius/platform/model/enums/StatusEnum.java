@@ -9,12 +9,7 @@ import lombok.Getter;
 @Getter
 public enum StatusEnum {
 
-    /**
-     * redis_version_package
-     */
-    /*packageStatus*/
-    INVALID("0","失效"),
-    VALID("1","有效"),
+
 
 
 
