@@ -32,6 +32,8 @@ public class RedisInstance {
     private String masterHostIp;
     /*主节点Redis端口（从节点有值，主节点为空）*/
     private String masterRedisPort;
+    /*Redis故障恢复备份配置文件的SHA256摘要，非null，默认'' */
+    private String configSha256;
     /*最近心跳时间*/
     private LocalDateTime lastHeartbeatTime;
 

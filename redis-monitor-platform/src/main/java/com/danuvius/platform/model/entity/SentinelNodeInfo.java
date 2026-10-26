@@ -13,6 +13,8 @@ public class SentinelNodeInfo {
     /*主键id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
+    /*监控实例id*/
+    private String instanceId;
     /*哨兵节点名*/
     private String nodeName;
     /*哨兵节点IP*/
@@ -21,6 +23,8 @@ public class SentinelNodeInfo {
     private String nodePort;
     /*哨兵状态：0=离线/1=在线*/
     private String sentinelStatus;
+    /*Redis故障恢复备份配置文件的SHA256摘要，非null，默认'' */
+    private String configSha256;
     /*最后心跳时间*/
     private LocalDateTime lastHeartbeatTime;
 

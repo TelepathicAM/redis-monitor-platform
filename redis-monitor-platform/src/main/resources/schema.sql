@@ -1,22 +1,28 @@
 -- ============================================================
 -- Redis Monitor Platform 建表语句（PostgreSQL / Supabase）
 --
--- 本文件按当前实体类（com.danuvius.platform.model.entity.*）
--- 与 Mapper / Service 实际使用的列重新生成，适用于全新环境初始化。
---
--- 与旧版 schema.sql 的差异（详见 docs/schema-review.md）：
---   1. executor_info 删除实体类中不存在的 executor_id 遗留列；
---      instance_id 增加 NOT NULL DEFAULT ''，与注册流程的“未绑定”语义一致；
+--   executor_info
 --      增加 (host_ip, executor_port) 唯一索引，避免重复注册产生多行。
---   2. audit_log 补齐实体类中的 updated_time 列
---      （MyBatis-Plus 通用查询会带上该列，缺失会导致 /api/audit/logs 报错）。
---   3. redis_instance.instance_id 增加唯一索引；sentinel_node_info 增加
+--   redis_instance.instance_id 增加唯一索引；sentinel_node_info 增加
 --      (node_ip, node_port) 唯一索引，供执行器上报时 upsert。
---   4. 采集/告警相关索引统一为 (instance_id, tm DESC) 等实际查询口径。
+--   采集/告警相关索引统一为 (instance_id, tm DESC) 等实际查询口径。
 --
--- 已有环境请勿重复执行本文件，使用 db/schema-upgrade.sql 做增量升级。
 -- ============================================================
+BEGIN;
 
+-- ============================================================
+-- 删除已有表（按依赖倒序）
+-- ============================================================
+DROP TABLE IF EXISTS audit_log CASCADE;
+DROP TABLE IF EXISTS rms_node_status_log CASCADE;
+DROP TABLE IF EXISTS rms_metric_log CASCADE;
+DROP TABLE IF EXISTS redis_switch_event CASCADE;
+DROP TABLE IF EXISTS alarm_notice_log CASCADE;
+DROP TABLE IF EXISTS alarm_record CASCADE;
+DROP TABLE IF EXISTS alarm_rule CASCADE;
+DROP TABLE IF EXISTS sentinel_node_info CASCADE;
+DROP TABLE IF EXISTS redis_instance CASCADE;
+DROP TABLE IF EXISTS executor_info CASCADE;
 -- ============================================================
 -- 执行器信息表
 -- ============================================================
@@ -60,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_executor_token ON executor_info(executor_token);
 -- Redis实例基础信息表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS redis_instance (
-    id                  character varying(32) PRIMARY KEY NOT NULL,
+                                              id                  character varying(32) PRIMARY KEY NOT NULL,
     instance_id         character varying(32) NOT NULL,
     instance_name       character varying(100) NOT NULL,
     host_ip             character varying(20) NOT NULL,
@@ -70,11 +76,12 @@ CREATE TABLE IF NOT EXISTS redis_instance (
     run_status          character varying(4) NOT NULL,
     master_host_ip      character varying(20),
     master_redis_port   character varying(10),
+    config_sha256       character varying(64) DEFAULT ''::character varying NOT NULL,
     last_heartbeat_time timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
     management_status   character varying(16) DEFAULT '0'::character varying NOT NULL,
     created_time        timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_time        timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
+    );
 
 COMMENT ON TABLE redis_instance IS 'Redis实例表:保存已纳管Redis实例的连接、角色、运行状态、主从关系。';
 COMMENT ON COLUMN redis_instance.id IS '主键id';
@@ -87,6 +94,7 @@ COMMENT ON COLUMN redis_instance.redis_version IS 'Redis版本号';
 COMMENT ON COLUMN redis_instance.run_status IS '运行状态：0=离线/1=正常/2=警告/3=严重';
 COMMENT ON COLUMN redis_instance.master_host_ip IS '主节点IP（从节点有值，主节点为空）';
 COMMENT ON COLUMN redis_instance.master_redis_port IS '主节点Redis端口（从节点有值，主节点为空）';
+COMMENT ON COLUMN redis_instance.config_sha256 IS 'Redis故障恢复备份配置文件的SHA256摘要，非null，默认''';
 COMMENT ON COLUMN redis_instance.last_heartbeat_time IS '最近心跳时间';
 COMMENT ON COLUMN redis_instance.management_status IS '纳管状态：0=未纳管/1=已纳管';
 COMMENT ON COLUMN redis_instance.created_time IS '创建时间';
@@ -106,11 +114,12 @@ CREATE TABLE IF NOT EXISTS sentinel_node_info (
     node_ip             character varying(20) NOT NULL,
     node_port           character varying(10) NOT NULL,
     sentinel_status     character varying(4) DEFAULT '1'::character varying NOT NULL,
+    config_sha256       character varying(64) DEFAULT ''::character varying NOT NULL,
     last_heartbeat_time timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
     management_status   character varying(16) DEFAULT '0'::character varying NOT NULL,
     created_time        timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_time        timestamp DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
+    );
 
 COMMENT ON TABLE sentinel_node_info IS '哨兵节点配置表:存储哨兵模式下节点的配置与在线状态';
 COMMENT ON COLUMN sentinel_node_info.id IS '节点id（主键）';
@@ -118,6 +127,7 @@ COMMENT ON COLUMN sentinel_node_info.node_name IS '哨兵节点名';
 COMMENT ON COLUMN sentinel_node_info.node_ip IS '哨兵节点IP';
 COMMENT ON COLUMN sentinel_node_info.node_port IS '哨兵节点端口';
 COMMENT ON COLUMN sentinel_node_info.sentinel_status IS '执行器上报的哨兵状态：0=离线/1=在线';
+COMMENT ON COLUMN sentinel_node_info.config_sha256 IS 'Redis故障恢复备份配置文件的SHA256摘要，非null，默认''';
 COMMENT ON COLUMN sentinel_node_info.last_heartbeat_time IS '最后心跳时间（执行器上报时间）';
 COMMENT ON COLUMN sentinel_node_info.management_status IS '纳管状态：0=未纳管/1=已纳管';
 COMMENT ON COLUMN sentinel_node_info.created_time IS '创建时间';
