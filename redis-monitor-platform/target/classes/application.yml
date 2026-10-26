@@ -1,7 +1,7 @@
 server:
   port: 8100
 
-platform: #临时
+platform:
   instance:
     offline-threshold-seconds: 70      # 实例/哨兵离线判定阈值（秒）
   alarm:
@@ -12,7 +12,6 @@ platform: #临时
     auto-recover:
       periods: 2                        #连续回落周期数，达到后自动恢复；<=0 关闭自动恢复
 
-#platform:
   register-code: Danuvius
   retain-days: 7
   report:
@@ -29,7 +28,6 @@ spring: #临时
 
 
 
-#spring:
   application:
     name: redis-monitor-platform
   datasource:
