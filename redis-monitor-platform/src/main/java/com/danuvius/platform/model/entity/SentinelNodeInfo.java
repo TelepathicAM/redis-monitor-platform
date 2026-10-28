@@ -13,8 +13,6 @@ public class SentinelNodeInfo {
     /*主键id*/
     @TableId(type = IdType.ASSIGN_ID)
     private String id;
-    /*监控实例id*/
-    private String instanceId;
     /*哨兵节点名*/
     private String nodeName;
     /*哨兵节点IP*/
@@ -27,7 +25,6 @@ public class SentinelNodeInfo {
     private String configSha256;
     /*最后心跳时间*/
     private LocalDateTime lastHeartbeatTime;
-
     /*纳管状态：0=未纳管/1=已纳管*/
     private String managementStatus;
     /*创建时间*/

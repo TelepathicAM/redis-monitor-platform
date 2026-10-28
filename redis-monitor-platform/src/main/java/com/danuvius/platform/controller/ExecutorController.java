@@ -16,8 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import javax.validation.constraints.NotBlank;
 
 @RestController
-@RequestMapping("/api/agent")
-
+@RequestMapping("/agent")
 public class ExecutorController {
 
     private final ExecutorInfoService executorInfoService;

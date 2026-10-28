@@ -1,8 +1,6 @@
 package com.danuvius.platform.model.entity;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -28,9 +26,11 @@ public class RedisInstance {
     private String redisVersion;
     /*运行状态：0=离线/1=正常/2=警告/3=严重*/
     private String runStatus;
-    /*主节点IP（从节点有值，主节点为空）*/
+    /*主节点IP（从节点有值，主节点默认''）*/
+    @TableField(insertStrategy = FieldStrategy.NOT_NULL)
     private String masterHostIp;
-    /*主节点Redis端口（从节点有值，主节点为空）*/
+    /*主节点Redis端口（从节点有值，主节点默认''）*/
+    @TableField(insertStrategy = FieldStrategy.NOT_NULL)
     private String masterRedisPort;
     /*Redis故障恢复备份配置文件的SHA256摘要，非null，默认'' */
     private String configSha256;

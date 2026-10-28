@@ -76,7 +76,7 @@ public class MonitorController {
     @GetMapping("/realtime/trend")
     public BaseResponse<TrendResponse> trend(TrendRequest req) {
         TrendRequestValidator.validate(req);
-
+        log.info("多节点指标趋势接口：{}", req.toString());
         return ResultUtils.success(redisInstanceService.getTrend(req));
     }
 
@@ -148,7 +148,7 @@ public class MonitorController {
     @GetMapping("/report/export/status")
     public BaseResponse<ReportExportResponse> exportStatus(
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId) {
-        IdValidator.check(taskId, "taskId",32,"taskId");
+        IdValidator.check(taskId, "EP_",32,"taskId");
 
         return ResultUtils.success(redisInstanceService.queryExportTask(taskId));
     }
@@ -163,7 +163,7 @@ public class MonitorController {
             @RequestParam @NotBlank(message = "taskId不能为空") String taskId,
             HttpServletResponse response) throws IOException {
 
-        IdValidator.check(taskId, "taskId", 32, "taskId");
+        IdValidator.check(taskId, "EP_", 32, "taskId");
 
         File file = redisInstanceService.getExportFile(taskId);
         String fileName = URLEncoder.encode(file.getName(), StandardCharsets.UTF_8.name())

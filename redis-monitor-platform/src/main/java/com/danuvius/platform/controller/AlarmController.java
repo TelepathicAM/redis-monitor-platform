@@ -9,10 +9,12 @@ import com.danuvius.platform.model.dto.alarm.rule.*;
 import com.danuvius.platform.service.AlarmRecordService;
 import com.danuvius.platform.service.AlarmRuleService;
 import com.danuvius.platform.util.validate.*;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+@Slf4j
 @RestController
 @RequestMapping("/alarm")
 public class AlarmController {
@@ -33,6 +35,7 @@ public class AlarmController {
     @GetMapping("/rule/list")
     public BaseResponse<RulePageResponse> getAlarmRuleList( RuleListRequest req) {
         RuleListRequestValidator.validate(req);
+        log.info("告警规则列表查询接口：{}", req.toString());
 
         RulePageResponse rulePageResponse =alarmRuleService.getRulePage(req);
         return ResultUtils.success(rulePageResponse);
@@ -46,6 +49,7 @@ public class AlarmController {
     @PostMapping("/rule/add")
     public BaseResponse<String> addRule( @RequestBody RuleAddRequest req) {
         RuleAddRequestValidator.validate(req);
+        log.info("新增告警规则接口：{}", req.toString());
 
         String ruleId = alarmRuleService.addRule(req);
         return ResultUtils.success(ruleId);
@@ -59,6 +63,7 @@ public class AlarmController {
     @PostMapping("/rule/update")
     public BaseResponse<Boolean> updateRule( @RequestBody UpdateRequest req) {
         UpdateRequestValidator.validate(req);
+        log.info("修改告警规则接口：{}", req.toString());
 
         Boolean result=alarmRuleService.updateRule(req);
         if(result){
@@ -92,6 +97,7 @@ public class AlarmController {
     @PostMapping("/rule/toggle-status")
     public BaseResponse<Boolean> toggleStatus( @RequestBody RuleToggleRequest req) {
         RuleToggleRequestValidator.validate(req);
+        log.info("告警规则状态切换接口：{}", req.toString());
 
         Boolean result=alarmRuleService.toggleStatus(req.getRuleId(), req.getEnableStatus());
         if(result){
@@ -129,6 +135,7 @@ public class AlarmController {
      */
     @GetMapping("/rule/overview")
     public BaseResponse<RuleOverviewDTO> ruleOverview() {
+        log.info("告警监控页概览统计接口");
 
         return ResultUtils.success(alarmRuleService.getRuleOverview());
     }
@@ -139,6 +146,8 @@ public class AlarmController {
      */
     @GetMapping("/rule/recent-unrecovered")
     public BaseResponse<List<RecordItemResponse>> recentUnrecovered() {
+        log.info("未恢复告警列表接口");
+
         return ResultUtils.success(alarmRecordService.getRecentUnrecovered());
     }
 
@@ -148,6 +157,8 @@ public class AlarmController {
      */
     @GetMapping("/rule/recent")
     public BaseResponse<List<RecordItemResponse>> recent() {
+        log.info("最近告警列表接口");
+
         return ResultUtils.success(alarmRecordService.getRecent());
     }
 
@@ -157,6 +168,8 @@ public class AlarmController {
      */
     @GetMapping("/record/overview")
     public BaseResponse<RecordOverviewResponse> recordOverview() {
+        log.info("告警记录页概览统计接口，最近3天");
+
         return ResultUtils.success(alarmRecordService.getRecordOverview());
     }
 
@@ -169,6 +182,7 @@ public class AlarmController {
     @GetMapping("/record/page")
     public BaseResponse<RecordPageResponse> recordPage( RecordPageRequest req) {
         RecordPageRequestValidator.validate(req);
+        log.info("告警分页查询接口{}", req.toString());
 
         return ResultUtils.success(alarmRecordService.getRecordPage(req));
     }
@@ -181,6 +195,7 @@ public class AlarmController {
     @GetMapping("/record/detail")
     public BaseResponse<RecordDetailResponse> recordDetail(@RequestParam String alarmRecordId) {
         IdValidator.snowflake(alarmRecordId, "alarmRecordId");
+        log.info("告警记录详情接口{}", alarmRecordId);
 
         return ResultUtils.success(alarmRecordService.getRecordDetail(alarmRecordId));
     }
@@ -193,6 +208,7 @@ public class AlarmController {
     @GetMapping("/record/metric-trend")
     public BaseResponse<RecordMetricTrendResponse> metricTrend(@RequestParam  String alarmRecordId) {
         IdValidator.snowflake(alarmRecordId, "alarmRecordId");
+        log.info("告警关联指标波动曲线接口{}", alarmRecordId);
 
         return ResultUtils.success(alarmRecordService.getMetricTrend(alarmRecordId));
     }
@@ -205,6 +221,7 @@ public class AlarmController {
     @PostMapping("/record/recover")
     public BaseResponse<Boolean> recoverRecord( @RequestParam String alarmRecordId) {
         IdValidator.snowflake(alarmRecordId, "alarmRecordId");
+        log.info("告警人工确认恢复接口{}", alarmRecordId);
 
         Boolean result = alarmRecordService.recoverAlarm(alarmRecordId);
         if (result) {
